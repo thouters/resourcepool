@@ -1,0 +1,27 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt check
+        entry: bash -lc 'cargo fmt --all -- --check'
+        language: system
+        types: [rust]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: bash -lc 'cargo clippy --workspace --all-targets --all-features -- -D warnings'
+        language: system
+        stages: [commit]
+      - id: cargo-audit
+        name: cargo audit (optional)
+        # cargo-audit is optional; if not installed the hook will print a message and pass
+        entry: bash -lc 'command -v cargo-audit >/dev/null 2>&1 && cargo audit || { echo "cargo-audit not installed; skipping"; exit 0; }'
+        language: system
+        stages: [commit]
+
+  - repo: local
+    hooks:
+      - id: commit-msg-conventional
+        name: Conventional commit message check
+        entry: python3 scripts/commit-msg-check.py
+        language: system
+        stages: [commit-msg]
