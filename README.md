@@ -2,35 +2,42 @@
 
 resourcepool(d)/respo(d) - a resource (eg network connected equipment test bench) leasing system
 
-It's a Http service where you can request exclusive access to a resource, which is composed of a set of entities with
+It's a HTTP service where you can request exclusive access to a resource, which is composed of a set of entities with
 properties.
-A testbench (bench) is typically used for hardware in the loop testing in software validation, and is composed of one or more DUT's, debugging hardware and measurement equipment.
-Hence, a client would request access to a resource matching properties, and of which the entities match properties.
+A resource could be a testbench (bench), which is typically used for hardware in the loop testing in software validation, and is composed of one or more devices under test, debugging adaptors and measurement equipment.
+
+Hence, a client would request access to a resource by either specifying its name, or submitting a query describing properties the resource or its entities posess.
+When submitting a query, the result can be any resource matching the query, returning an next available resource without the
+need for the client to pick a specific one.
 
 # Summary usage
 
-As resource user, I want to do a HTTP POST /lock?location=myoffice&resource=myresource to request use of an a resource by name.
-Upon receiving the message that the resource is locked by me, I should be able to use the returned resource (description)
-until I cut the connection to the service. At that point the lock is considered implicitly released.
+As resource client, I want to do a HTTP POST /lock?location=myoffice&resource=myresource to request use of an a resource by name.
+Upon receiving the message that the resource is locked, the client shall be able to use the returned resource (description)
+until the client cuts the connection to the service. At that point the lock is considered implicitly released.
 
-Clients get queued if the lock is not available, and can specify a priority value (to have a developer skip the queue over a CI/CD runner)
+Clients get queued if the lock is not available, and can specify a priority value (to have a client skip the queue over a CI/CD runner),
+while the client is waiting, the server sends updates on queue usage of the potential candidate resources.
 
 There can be language specific Client libraries (eg python) to use in test scenario's (eg pytest) that use the physical devices
 
 There is a command line tool (rpclient) to claim maintenance on the test setup
 
-The service maintains database/list with  office location, property tags, freeform dict of details (port numbers etc) persisted to disk.
+The service maintains registry of resources, which have an office location, property tags, freeform dict of details (port numbers etc) persisted to disk.
 
-Devops can do a HTTP POST /database with yaml to update the database (eg. from A CI/CD pipeline), which returns an HTTP error if it fails to validate.
+Devops can do a HTTP POST /registry with yaml to update the registry (eg. from A CI/CD pipeline), which returns an HTTP error if it fails to validate.
 
-# Far stretch ideas
+# Security
 
-For security each resource could be fitted with a local daemon that provides wireguard connection info to the resourcepoold,
-allowing the resource users to securely use the resource.
+This
+
+For hardening, TLS with client side certificates would be an option, and each resource could be fitted with a local
+service that provides wireguard or tailscale connection info to the resourcepoold, allowing the resource clients to
+securely communicate with the resource.
 
 # Terminology
 
-resource.inventory - entity - property
+resource.entities - entity - property
 
 
 # Overview of deliverables
@@ -45,7 +52,6 @@ resource.inventory - entity - property
 
 ## stretch
 
-* GET / would show an overview of allocation of the resources
 * python based client library
 * bash+curl based example
 
@@ -55,70 +61,78 @@ resource.inventory - entity - property
 
 Use hyper (library) + hyper_thungstenite (websockets) or rocket (fancy wrapper around a function per endpoint)
 
-**As a ** user \
+**As a ** client \
 **I can do** http post to placeholder endpoints
 * POST /lock?resource=name&description=whatIdo&priority=10
 * GET / - return hello, eventually it can print an overview of available HW and use.
 
 ## 1. minimum viable product
 
-As a devops engineer \
-I am able to configure the service by changing datastructures in the main file.
+**As a** devops engineer \
+**I am able to** configure the service by changing datastructures in the main file.
 
 The datastructure should be like
 ```
 pool:
   resources:
     resource1:
-      inventory:
+      entities:
         programmer: {}
         dut: {}
 ```
 
-**As a** developer \
-**I can do** a HTTP call using the command line tool, specifying the testbench by (unique) name.
+**As a** client \
+**I can do** a HTTP call using the command line tool, specifying the testbench by (unique) name. I get a resource busy
+error or message that I have a lease. When the client cuts the connection the lock is released by the server.
 
 DoD: automated test: service is run and client is run, running command, when a second client is started, it returns an error.
 
+**As a** devops engineer \
+**I am able to** get an overview of resource usage by sending HTTP GET /
+
 ## 2. Queueing
 
-**As a** developer
+**As a** client
 **I will have to** wait while the hardware is in use instead of seeing an error, and I will get a message when I obtain the lock.
 
 
 DoD: automated test: service is run and client is run, when a second client is started, it waits until first is stopped and then runs the command.
 
 
-## 3. Test parameterisation based on testbench leased
+## 3. Test parameterisation based on resource leased
 
-**As a** devops engineer
-**I am able to** add metadata to the respod database, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
+**As a** devops engineer \
+**I am able to** add metadata to the respod registry, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
 
-As a devops engineer
-I am able to validate the respod database by running the tool with --validate-schema
+**As a** devops engineer \
+**I am able to** validate the respod registry by running the tool with --validate-schema
 
-As a devops engineer
-I am able to mutate the respod database by sending a HTTP POST with yaml data.
+**As a** devops engineer \
+**I am able to** mutate the respod registry by sending a HTTP POST with yaml data.
 
-As a developer
-I am able to specify a location and tags that
+**As a** client
+**I can** request a resoruce using a query composed of location and/or property sets.
 
+example query: ``location=office1&properties=[a]&entity_properties=[[c],[e]]``
+
+example registry:
 ```
 pool:
+  name: "software update testbenches"
   resources:
     resource1:
       properties: ["a","b"]
       location: "office1"
-      inventory:
+      entities:
         programmer:
           properties: ["c","d"]
         dut:
           properties: ["e","f"]
 ```
 
-DoD: user story met and unittests for selection added.
+DoD: user story met and unittests for resource selection added.
 
 ## 4. persistence
-As a devops engineer
-I want the respod database to be persisted to disk so that it survives restarts of the service.
+**As a** devops engineer \
+**I want** the respod registry to be persisted to disk so that it survives restarts of the service.
 
