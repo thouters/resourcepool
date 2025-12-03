@@ -3,10 +3,10 @@
 resourcepool(d)/respo(d) - a resource (eg network connected equipment test bench) leasing system
 
 It's a HTTP service where you can request exclusive access to a resource, which is composed of a set of entities with
-properties.
+attributes.
 A resource could be a testbench (bench), which is typically used for hardware in the loop testing in software validation, and is composed of one or more devices under test, debugging adaptors and measurement equipment.
 
-Hence, a client would request access to a resource by either specifying its name, or submitting a query describing properties the resource or its entities posess.
+Hence, a client would request access to a resource by either specifying its name, or submitting a query describing attributes the resource or its entities posess.
 When submitting a query, the result can be any resource matching the query, returning an next available resource without the
 need for the client to pick a specific one.
 
@@ -29,7 +29,7 @@ Devops can do a HTTP POST /registry with yaml to update the registry (eg. from A
 
 # Security
 
-This
+Security is not a primary concern. The service is intended to be used on-premises, not exposed to the public internet.
 
 For hardening, TLS with client side certificates would be an option, and each resource could be fitted with a local
 service that provides wireguard or tailscale connection info to the resourcepoold, allowing the resource clients to
@@ -102,18 +102,18 @@ DoD: automated test: service is run and client is run, when a second client is s
 ## 3. Test parameterisation based on resource leased
 
 **As a** devops engineer \
-**I am able to** add metadata to the respod registry, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
+**I am able to** add metadata to the respo registry, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
 
 **As a** devops engineer \
-**I am able to** validate the respod registry by running the tool with --validate-schema
+**I am able to** validate the respo registry by running the tool with --validate-schema
 
 **As a** devops engineer \
-**I am able to** mutate the respod registry by sending a HTTP POST with yaml data.
+**I am able to** mutate the respo registry by sending a HTTP POST with yaml data.
 
 **As a** client
 **I can** request a resoruce using a query composed of location and/or property sets.
 
-example query: ``location=office1&properties=[a]&entity_properties=[[c],[e]]``
+example query: ``location=office1&attributes=[a]&entity_properties=[[c],[e]]``
 
 example registry:
 ```
@@ -121,18 +121,24 @@ pool:
   name: "software update testbenches"
   resources:
     resource1:
-      properties: ["a","b"]
+      attributes: ["a","b"]
       location: "office1"
       entities:
         programmer:
-          properties: ["c","d"]
+          attributes: ["c","d"]
+          properties: # free form data user domain
+            socket: 127.0.0.1:1234
+            api_key: xyz
         dut:
-          properties: ["e","f"]
+          attributes: ["e","f"]
+          properties:
+            socket: 127.0.0.1:4567
+            api_key: foobar
 ```
 
 DoD: user story met and unittests for resource selection added.
 
 ## 4. persistence
 **As a** devops engineer \
-**I want** the respod registry to be persisted to disk so that it survives restarts of the service.
+**I want** the respo registry to be persisted to disk so that it survives restarts of the service.
 
