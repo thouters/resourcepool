@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+
+type AttributeList = Vec<String>;
+type AttributeMatch = Vec<(AttributeList, Resource)>;
+
 #[derive(Debug, Clone)]
 struct Resource {
     attributes: Vec<String>, // TODO:  Use HashSet
@@ -27,7 +31,7 @@ struct Clients {
 struct Request {
     location: Option<String>,
     pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
-    resource_attributes: Option<Vec<Vec<String>>>,
+    resource_attributes: Option<Vec<AttributeList>>,
 }
 
 #[derive(Debug)]
@@ -37,16 +41,47 @@ enum RequestError {
     NotReady(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PoolLease {
     leasetime: u32,
     pool: Pool,
+    pairing: Option<AttributeMatch>,
 }
 
 trait Requestable {
     fn request(&self, request: Request) -> Result<PoolLease, RequestError>;
 }
 
+fn overlap(a: Vec<String>, b: Vec<String>) -> usize {
+    a.iter().filter(|x| b.contains(x)).count()
+}
+fn matches(a: &Vec<String>, b: &Vec<String>) -> bool {
+    a.iter().all(|x| b.contains(x))
+}
+
+fn solve_resource_matches(
+    pool: &Pool,
+    requested_resources_spec: &Vec<AttributeList>,
+) -> Option<AttributeMatch> {
+    // pair up all items from the list so that they match.
+    let mut matchlist: AttributeMatch = Vec::new();
+
+    // FIXME: properly implement the assignment problem
+    for resource_spec in requested_resources_spec {
+        let match_: Vec<&Resource> = pool
+            .resources
+            .iter()
+            .filter(|y: &&Resource| matches(&y.attributes, resource_spec))
+            .collect();
+        if match_.iter().count() > 0 {
+            matchlist.push((resource_spec.clone(),match_[0].clone()));
+        } else {
+            return None;
+        }
+    }
+
+    Some(matchlist)
+}
 impl Requestable for Registry {
     fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
         for pool in &self.pools {
@@ -61,15 +96,26 @@ impl Requestable for Registry {
                 }
             }
             // TODO: check there is an unique resource per set of resource_attributes
-            // TODO: test location
             if let Some(wanted_location) = &request.location {
                 if *wanted_location != pool.location {
+                    continue;
+                }
+            }
+            if let Some(requested_resources_spec) = &request.resource_attributes {
+                if let Some(match_) = solve_resource_matches(pool, &requested_resources_spec) {
+                    return Ok(PoolLease {
+                        leasetime: 1234, // TODO: read default lease time from config file
+                        pool: pool.clone(),
+                        pairing: Some(match_),
+                    });
+                } else {
                     continue;
                 }
             }
             return Ok(PoolLease {
                 leasetime: 1234, // TODO: read default lease time from config file
                 pool: pool.clone(),
+                pairing: None,
             });
         }
         Err(RequestError::Impossible("No match".into()))
@@ -77,52 +123,89 @@ impl Requestable for Registry {
 }
 
 fn main() {
-    // TODO: move to unittest (-ENOTIME today)
-    //hello world
-    let r = Registry {
-        pools: vec![Pool {
-            name: "pool1".into(),
-            attributes: vec!["attr1".into(), "attr2".into()],
-            location: "location1".into(),
-            resources: vec![],
-        }],
-    };
-    println!("Given we have the registry with pools: {:?}", r);
+    println!("hello world");
+}
 
-    // sunny day test
-    let ok_request = Request {
-        location: None,
-        pool_attributes: Some(vec!["attr1".into()]),
-        resource_attributes: None,
-    };
-    println!("When I request {:?}", ok_request.clone());
-    let ok_result = r.request(ok_request.clone());
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    println!("I get poollease {:?}", ok_result);
-    assert!(ok_result.is_ok());
+    #[test]
+    fn registry_request_scenarios() {
+        let r = Registry {
+            pools: vec![Pool {
+                name: "pool1".into(),
+                attributes: vec!["attr1".into(), "attr2".into()],
+                location: "location1".into(),
+                resources: vec![
+                    Resource {
+                        attributes: vec!["RA1".into(), "RA2".into()],
+                        properties: HashMap::new(),
+                    },
+                    Resource {
+                        attributes: vec!["RB1".into(), "RB2".into()],
+                        properties: HashMap::new(),
+                    },
+                ],
+            }],
+        };
+        println!("Given we have the registry with pools: {:?}", r);
 
-    // Failure case test attributes
-    let nok_request = Request {
-        pool_attributes: Some(vec!["attr3".into()]),
-        .. ok_request.clone()
-    };
-    println!("When I request {:?}", nok_request);
-    let nok_result = r.request(nok_request);
+        // sunny day test
+        let ok_request = Request {
+            location: None,
+            pool_attributes: Some(vec!["attr1".into()]),
+            resource_attributes: None,
+        };
+        println!("When I request {:?}", ok_request.clone());
+        let ok_result = r.request(ok_request.clone());
 
-    println!("I get an error {:?}", nok_result);
-    assert!(!nok_result.is_ok());
+        println!("I get poollease {:?}", ok_result);
+        assert!(ok_result.is_ok());
 
+        // Failure case test pool attributes
+        let nok_request = Request {
+            pool_attributes: Some(vec!["attr3".into()]),
+            ..ok_request.clone()
+        };
+        println!("When I request {:?}", nok_request);
+        let nok_result = r.request(nok_request);
 
-    // Failure case test location
-    let nok_request = Request {
-        location: Some("abroad".into()),
-        .. ok_request.clone()
-    };
-    println!("When I request {:?}", nok_request);
-    let nok_result = r.request(nok_request);
+        println!("I get an error {:?}", nok_result);
+        assert!(nok_result.is_err());
 
-    println!("I get an error {:?}", nok_result);
-    assert!(!nok_result.is_ok());
+        // Failure case test location
+        let nok_request = Request {
+            location: Some("abroad".into()),
+            ..ok_request.clone()
+        };
+        println!("When I request {:?}", nok_request);
+        let nok_result = r.request(nok_request);
 
-    ()
+        println!("I get an error {:?}", nok_result);
+        assert!(nok_result.is_err());
+
+        // Resource attributes
+        // sunny day test
+        let ra_ok_request = Request {
+            resource_attributes: Some(vec![vec!["RA1".into()]]),
+            ..ok_request.clone()
+        };
+        println!("When I request {:?}", ra_ok_request.clone());
+        let ok_result = r.request(ra_ok_request.clone());
+
+        println!("I get poollease {:?}", ok_result);
+        assert!(ok_result.is_ok());
+
+        // Failure case
+        let nok_request = Request {
+            resource_attributes: Some(vec![vec!["RA3".into()]]),
+            ..ok_request.clone()
+        };
+        println!("When I request {:?}", nok_request);
+        let nok_result = r.request(nok_request);
+
+        println!("I get an error {:?}", nok_result);
+        assert!(nok_result.is_err());
+    }
 }
