@@ -25,8 +25,8 @@ See README.md for usage, roadmap, and further details.
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::time::sleep;
+use tokio::sync::Notify;
+use tokio::time::{sleep, Sleep, Duration};
 use tokio::join;
 
 
@@ -68,7 +68,8 @@ struct Request {
 enum RequestError {
     Impossible,
     InUse,
-    NotReady(String),
+    NotReady,
+    TimeOut
 }
 
 #[derive(Debug, Clone)]
@@ -163,22 +164,28 @@ impl Requestable for Inventory {
 
 struct LocalClient {
     name: String,
-    inventory: Arc<Mutex<Inventory>>
+    inventory: Arc<Mutex<Inventory>>,
+    notify: Arc<Notify>
 }
 impl LocalClient {
     async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
-        let mut has_timeout = false;
+        let mut timeout_timer: Option<Sleep> = None;
         if let Some(timeout) = request.timeout.clone() {
-            has_timeout = true;
-            // todo create a timer that we can wait on
+            timeout_timer = Some(sleep(timeout));
         }
         loop {
             match self.inventory.lock().unwrap().request(&request).await {
                 Ok(lease) => { return Ok(lease) }
                 Err(RequestError::InUse) => {
-                    if has_timeout {
-                        //stand around some more by
-                        sleep(Duration::from_millis(100)).await;
+                    if let Some(timeout_timer) = timeout_timer {
+                        tokio::select! {
+                            _ = self.notify.notified() => { 
+                                // fall through to retry
+                            },
+                            _ = timeout_timer =>  {
+                                return Err(RequestError::TimeOut);
+                            },
+                        }
                         //sleeping on an event that gets notified of changes to the usage
                     } else {
                         return Err(RequestError::InUse);
@@ -193,19 +200,22 @@ impl LocalClient {
 }
 
 pub struct RespoClientFactory {
-    inventory: Arc<Mutex<Inventory>>
+    inventory: Arc<Mutex<Inventory>>,
+    notify: Arc<Notify>
 }
 
 impl RespoClientFactory {
     fn new(inventory: Inventory) -> RespoClientFactory  {
         Self {
-            inventory: Arc::new(Mutex::new(inventory))
+            inventory: Arc::new(Mutex::new(inventory)),
+            notify: Arc::new(Notify::new())
         }
     }
     fn create(&mut self, name: String) -> LocalClient {
         LocalClient {
             name: name,
-            inventory:  Arc::clone(&self.inventory)
+            inventory:  Arc::clone(&self.inventory),
+            notify:  Arc::clone(&self.notify)
         }
     }
 }
@@ -299,7 +309,7 @@ mod tests {
     async fn test_concurrent_usage_returns_error() {
         let mut clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
-        // Failure case
+
         let client_a = clientfactory.create("client_a".into());
         let client_b = clientfactory.create("client_b".into());
 
