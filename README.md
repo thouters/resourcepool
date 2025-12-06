@@ -23,9 +23,9 @@ There can be language specific Client libraries (eg python) to use in test scena
 
 There is a command line tool (rpclient) to claim maintenance on the test setup
 
-The service maintains registry of resources, which have an office location, property tags, freeform dict of details (port numbers etc) persisted to disk.
+The service maintains an inventory of resources, which have an office location, property tags, freeform dict of details (port numbers etc) persisted to disk.
 
-Devops can do a HTTP POST /registry with yaml to update the registry (eg. from A CI/CD pipeline), which returns an HTTP error if it fails to validate.
+Devops can do a HTTP POST /inventory with yaml to update the inventory (eg. from A CI/CD pipeline), which returns an HTTP error if it fails to validate.
 
 # Security
 
@@ -102,20 +102,20 @@ DoD: automated test: service is run and client is run, when a second client is s
 ## 3. Test parameterisation based on resource leased
 
 **As a** devops engineer \
-**I am able to** add metadata to the respo registry, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
+**I am able to** add metadata to the respo inventory, which can be retrieved by clients to eg. be able to retrieve the hostname of the testbench equipment.
 
 **As a** devops engineer \
-**I am able to** validate the respo registry by running the tool with --validate-schema
+**I am able to** validate the respo inventory by running the tool with --validate-schema
 
 **As a** devops engineer \
-**I am able to** mutate the respo registry by sending a HTTP POST with yaml data.
+**I am able to** mutate the respo inventory by sending a HTTP POST with yaml data.
 
 **As a** client
 **I can** request a resoruce using a query composed of location and/or property sets.
 
 example query: ``location=office1&attributes=[a]&entity_properties=[[c],[e]]``
 
-example registry:
+example inventory:
 ```
 pool:
   name: "software update testbenches"
@@ -140,5 +140,5 @@ DoD: user story met and unittests for resource selection added.
 
 ## 4. persistence
 **As a** devops engineer \
-**I want** the respo registry to be persisted to disk so that it survives restarts of the service.
+**I want** the respo inventory to be persisted to disk so that it survives restarts of the service.
 
