@@ -52,11 +52,8 @@ trait Requestable {
     fn request(&self, request: Request) -> Result<PoolLease, RequestError>;
 }
 
-fn overlap(a: Vec<String>, b: Vec<String>) -> usize {
-    a.iter().filter(|x| b.contains(x)).count()
-}
-fn matches(a: &Vec<String>, b: &Vec<String>) -> bool {
-    a.iter().all(|x| b.contains(x))
+fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
+    subset.iter().all(|x| superset.contains(x))
 }
 
 fn solve_resource_matches(
@@ -68,18 +65,17 @@ fn solve_resource_matches(
 
     // FIXME: properly implement the assignment problem
     for resource_spec in requested_resources_spec {
-        let match_: Vec<&Resource> = pool
+        let matching_resources: Vec<&Resource> = pool
             .resources
             .iter()
-            .filter(|y: &&Resource| matches(&y.attributes, resource_spec))
+            .filter(|y: &&Resource| matches(resource_spec, &y.attributes))
             .collect();
-        if match_.iter().count() > 0 {
-            matchlist.push((resource_spec.clone(),match_[0].clone()));
+        if matching_resources.iter().count() > 0 {
+            matchlist.push((resource_spec.clone(), matching_resources[0].clone()));
         } else {
             return None;
         }
     }
-
     Some(matchlist)
 }
 impl Requestable for Registry {
@@ -122,14 +118,12 @@ impl Requestable for Registry {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn build_simple_registry() -> Registry {
-         Registry {
+        Registry {
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -180,7 +174,7 @@ mod tests {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-         assert!(r.request(nok_request).is_err());
+        assert!(r.request(nok_request).is_err());
     }
     #[test]
     fn test_resource_attributes_match() {
