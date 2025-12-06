@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-type AttributeList = Vec<String>;
-type AttributeMatch = Vec<(AttributeList, Resource)>;
+type AttributeSet = Vec<String>;
+type AttributeMatch = Vec<(AttributeSet, Resource)>;
 
 #[derive(Debug, Clone)]
 struct Resource {
@@ -31,7 +31,7 @@ struct Clients {
 struct Request {
     location: Option<String>,
     pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
-    resource_attributes: Option<Vec<AttributeList>>,
+    resource_attributes: Option<Vec<AttributeSet>>,
 }
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ fn matches(a: &Vec<String>, b: &Vec<String>) -> bool {
 
 fn solve_resource_matches(
     pool: &Pool,
-    requested_resources_spec: &Vec<AttributeList>,
+    requested_resources_spec: &Vec<AttributeSet>,
 ) -> Option<AttributeMatch> {
     // pair up all items from the list so that they match.
     let mut matchlist: AttributeMatch = Vec::new();
@@ -130,9 +130,8 @@ fn main() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn registry_request_scenarios() {
-        let r = Registry {
+    fn build_simple_registry() -> Registry {
+         Registry {
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -148,64 +147,62 @@ mod tests {
                     },
                 ],
             }],
-        };
-        println!("Given we have the registry with pools: {:?}", r);
-
-        // sunny day test
-        let ok_request = Request {
+        }
+    }
+    fn build_ok_request() -> Request {
+        Request {
             location: None,
             pool_attributes: Some(vec!["attr1".into()]),
             resource_attributes: None,
-        };
-        println!("When I request {:?}", ok_request.clone());
-        let ok_result = r.request(ok_request.clone());
+        }
+    }
+    #[test]
+    fn test_ok_pool_attributes() {
+        let r = build_simple_registry();
+        let ok_request = build_ok_request();
+        assert!(r.request(ok_request).is_ok());
+    }
 
-        println!("I get poollease {:?}", ok_result);
-        assert!(ok_result.is_ok());
-
-        // Failure case test pool attributes
+    #[test]
+    fn test_nok_pool_attributes() {
+        let r = build_simple_registry();
+        let ok_request = build_ok_request();
         let nok_request = Request {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        println!("When I request {:?}", nok_request);
-        let nok_result = r.request(nok_request);
+        assert!(r.request(nok_request).is_err());
+    }
 
-        println!("I get an error {:?}", nok_result);
-        assert!(nok_result.is_err());
-
-        // Failure case test location
+    #[test]
+    fn test_nok_location() {
+        let r = build_simple_registry();
+        let ok_request = build_ok_request();
         let nok_request = Request {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        println!("When I request {:?}", nok_request);
-        let nok_result = r.request(nok_request);
-
-        println!("I get an error {:?}", nok_result);
-        assert!(nok_result.is_err());
-
-        // Resource attributes
-        // sunny day test
+         assert!(r.request(nok_request).is_err());
+    }
+    #[test]
+    fn test_resource_attributes_match() {
+        let r = build_simple_registry();
+        let ok_request = build_ok_request();
         let ra_ok_request = Request {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
             ..ok_request.clone()
         };
-        println!("When I request {:?}", ra_ok_request.clone());
-        let ok_result = r.request(ra_ok_request.clone());
-
-        println!("I get poollease {:?}", ok_result);
-        assert!(ok_result.is_ok());
-
+        assert!(r.request(ra_ok_request.clone()).is_ok());
+    }
+    #[test]
+    fn test_resource_attributes_mismatch() {
+        let r = build_simple_registry();
+        let ok_request = build_ok_request();
         // Failure case
         let nok_request = Request {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        println!("When I request {:?}", nok_request);
-        let nok_result = r.request(nok_request);
-
-        println!("I get an error {:?}", nok_result);
-        assert!(nok_result.is_err());
+        assert!(r.request(nok_request).is_err());
     }
 }
