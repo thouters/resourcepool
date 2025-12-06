@@ -1,5 +1,6 @@
 
 
+* rename registry to inventory
 
 * stabilize the api for the registry so i can already add an async layer on top.
 

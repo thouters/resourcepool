@@ -1,4 +1,3 @@
-
 /*!
 Resource Pool Leasing System
 
@@ -9,7 +8,7 @@ requests to available resources, handling pool attributes, resource attributes, 
 Main Components:
 - Resource: Represents an individual entity with attributes and properties.
 - Pool: A collection of resources, with its own attributes and location.
-- Registry: Holds all pools and manages resource allocation.
+- Inventory: Holds all pools and manages resource allocation.
 - Request: Describes a client's requirements for resource allocation.
 - PoolLease: Represents a successful lease of a pool, including resource pairing.
 - Requestable: Trait for handling resource requests and matching logic.
@@ -25,6 +24,13 @@ See README.md for usage, roadmap, and further details.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio::join;
+
+
+
 
 type AttributeSet = Vec<String>;
 type AttributeMatch = Vec<(AttributeSet, Resource)>;
@@ -44,7 +50,7 @@ struct Pool {
 }
 // respod manages a pool
 #[derive(Debug)]
-struct Registry {
+struct Inventory {
     // holding the resources and usage info
     pools: Vec<Pool>,
 }
@@ -107,7 +113,7 @@ fn solve_resource_matches(
 }
 
 #[async_trait]
-impl Requestable for Registry {
+impl Requestable for Inventory {
     async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
         for pool in &self.pools {
             // TODO: there should be a more functional way to express this
@@ -147,12 +153,33 @@ impl Requestable for Registry {
     }
 }
 
+struct LocalClient {
+    inventory: Rc<Inventory>
+}
+
+pub struct RespoClientFactory {
+    inventory: Rc<Inventory>
+}
+
+impl RespoClientFactory {
+    fn new(inventory: Inventory) -> RespoClientFactory  {
+        Self {
+            inventory: Rc::new(inventory)
+        }
+    }
+    fn create(&mut self) -> LocalClient {
+        LocalClient {
+            inventory:  Rc::clone(&self.inventory)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn build_simple_registry() -> Registry {
-        Registry {
+    fn build_simple_inventory() -> Inventory {
+        Inventory {
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -170,6 +197,10 @@ mod tests {
             }],
         }
     }
+    fn build_simple_clientfactory() -> RespoClientFactory {
+        let inventory = build_simple_inventory();
+        RespoClientFactory::new(inventory)
+    }
     fn build_ok_request() -> Request {
         Request {
             location: None,
@@ -179,52 +210,72 @@ mod tests {
     }
     #[tokio::test]
     async fn test_ok_pool_attributes() {
-        let r = build_simple_registry();
+        let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
-        assert!(r.request(ok_request).await.is_ok());
+        assert!(inventory.request(ok_request).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_nok_pool_attributes() {
-        let r = build_simple_registry();
+        let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let nok_request = Request {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).await.is_err());
+        assert!(inventory.request(nok_request).await.is_err());
     }
 
     #[tokio::test]
     async fn test_nok_location() {
-        let r = build_simple_registry();
+        let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let nok_request = Request {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).await.is_err());
+        assert!(inventory.request(nok_request).await.is_err());
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
-        let r = build_simple_registry();
+        let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let ra_ok_request = Request {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
             ..ok_request.clone()
         };
-        assert!(r.request(ra_ok_request.clone()).await.is_ok());
+        assert!(inventory.request(ra_ok_request.clone()).await.is_ok());
     }
     #[tokio::test]
     async fn test_resource_attributes_mismatch() {
-        let r = build_simple_registry();
+        let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         // Failure case
         let nok_request = Request {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).await.is_err());
+        assert!(inventory.request(nok_request).await.is_err());
     }
+    #[tokio::test]
+    async fn test_concurrent_usage_returns_error() {
+        let mut clientfactory = build_simple_clientfactory();
+        let ok_request = build_ok_request();
+        // Failure case
+        let client_a = clientfactory.create();
+        let client_b = clientfactory.create();
 
+        let a = async {
+            println!("'a' started.");
+            assert!(client_a.inventory.request(ok_request.clone()).await.is_ok());
+            sleep(Duration::from_secs(1)).await;
+            println!("'a' finished.");
+        };
+        let b = async {
+            println!("'b' started.");
+            sleep(Duration::from_millis(100)).await;
+            assert!(client_b.inventory.request(ok_request.clone()).await.is_err());
+        };
+        join!(a, b);
+    }
 }
