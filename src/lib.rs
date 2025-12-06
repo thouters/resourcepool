@@ -47,6 +47,7 @@ struct Pool {
     attributes: Vec<String>, // TODO:  Use btreeset
     location: String,
     resources: Vec<Resource>,
+    user: Option<bool>
 }
 // respod manages a pool
 #[derive(Debug)]
@@ -54,22 +55,19 @@ struct Inventory {
     // holding the resources and usage info
     pools: Vec<Pool>,
 }
-#[derive(Debug)]
-struct Clients {
-    // holding the clients
-}
 
 #[derive(Debug, Clone)]
 struct Request {
     location: Option<String>,
     pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
     resource_attributes: Option<Vec<AttributeSet>>,
+    timeout: Option<Duration>
 }
 
 #[derive(Debug)]
 enum RequestError {
-    Impossible(String),
-    InUse(String),
+    Impossible,
+    InUse,
     NotReady(String),
 }
 
@@ -82,7 +80,7 @@ struct PoolLease {
 
 #[async_trait]
 trait Requestable {
-    async fn request(&self, request: Request) -> Result<PoolLease, RequestError>;
+    async fn request(&self, request: &Request) -> Result<PoolLease, RequestError>;
 }
 
 fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
@@ -114,7 +112,8 @@ fn solve_resource_matches(
 
 #[async_trait]
 impl Requestable for Inventory {
-    async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
+    async fn request(&self, request: &Request) -> Result<PoolLease, RequestError> {
+        let mut impossible = true;
         for pool in &self.pools {
             // TODO: there should be a more functional way to express this
             // skip if request.pool_attributes not a subset of pool.attributes
@@ -143,18 +142,54 @@ impl Requestable for Inventory {
                     continue;
                 }
             }
-            return Ok(PoolLease {
-                leasetime: 1234, // TODO: read default lease time from config file
-                pool: pool.clone(),
-                pairing: None,
-            });
+            if let Some(_user) = pool.user {
+                impossible = false;
+            } else {
+                //FIXME make self mutable and set this
+                //pool.user = Some(true);
+                return Ok(PoolLease {
+                    leasetime: 1234, // TODO: read default lease time from config file
+                    pool: pool.clone(),
+                    pairing: None,
+                });
+            }
         }
-        Err(RequestError::Impossible("No match".into()))
+        match impossible {
+            true => { Err(RequestError::Impossible) }
+            false => { Err(RequestError::InUse) }
+        }
     }
 }
 
 struct LocalClient {
+    name: String,
     inventory: Rc<Inventory>
+}
+impl LocalClient {
+    async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
+        let mut has_timeout = false;
+        if let Some(timeout) = request.timeout {
+            has_timeout = true;
+            // todo create a timer that we can wait on
+        }
+        loop {
+            match self.inventory.request(&request).await {
+                Ok(lease) => { return Ok(lease) }
+                Err(RequestError::InUse) => {
+                    if has_timeout {
+                        //stand around some more by
+                        sleep(Duration::from_millis(100)).await;
+                        //sleeping on an event that gets notified of changes to the usage
+                    } else {
+                        return Err(RequestError::InUse);
+                    }
+                }
+                Err(other) => {
+                    return Err(other);
+                }
+            }
+        }
+    }
 }
 
 pub struct RespoClientFactory {
@@ -167,8 +202,9 @@ impl RespoClientFactory {
             inventory: Rc::new(inventory)
         }
     }
-    fn create(&mut self) -> LocalClient {
+    fn create(&mut self, name: String) -> LocalClient {
         LocalClient {
+            name: name,
             inventory:  Rc::clone(&self.inventory)
         }
     }
@@ -194,6 +230,7 @@ mod tests {
                         properties: HashMap::new(),
                     },
                 ],
+                user: None
             }],
         }
     }
@@ -206,13 +243,14 @@ mod tests {
             location: None,
             pool_attributes: Some(vec!["attr1".into()]),
             resource_attributes: None,
+            timeout: None
         }
     }
     #[tokio::test]
     async fn test_ok_pool_attributes() {
         let inventory = build_simple_inventory();
         let ok_request = build_ok_request();
-        assert!(inventory.request(ok_request).await.is_ok());
+        assert!(inventory.request(&ok_request).await.is_ok());
     }
 
     #[tokio::test]
@@ -223,7 +261,7 @@ mod tests {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err());
     }
 
     #[tokio::test]
@@ -234,7 +272,7 @@ mod tests {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(inventory.request(nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err());
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
@@ -244,7 +282,7 @@ mod tests {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(ra_ok_request.clone()).await.is_ok());
+        assert!(inventory.request(&ra_ok_request.clone()).await.is_ok());
     }
     #[tokio::test]
     async fn test_resource_attributes_mismatch() {
@@ -255,26 +293,26 @@ mod tests {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err());
     }
     #[tokio::test]
     async fn test_concurrent_usage_returns_error() {
         let mut clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
         // Failure case
-        let client_a = clientfactory.create();
-        let client_b = clientfactory.create();
+        let client_a = clientfactory.create("client_a".into());
+        let client_b = clientfactory.create("client_b".into());
 
         let a = async {
             println!("'a' started.");
-            assert!(client_a.inventory.request(ok_request.clone()).await.is_ok());
+            assert!(client_a.request(ok_request.clone()).await.is_ok());
             sleep(Duration::from_secs(1)).await;
             println!("'a' finished.");
         };
         let b = async {
             println!("'b' started.");
             sleep(Duration::from_millis(100)).await;
-            assert!(client_b.inventory.request(ok_request.clone()).await.is_err());
+            assert!(client_b.request(ok_request.clone()).await.is_err());
         };
         join!(a, b);
     }
