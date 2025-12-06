@@ -24,7 +24,7 @@ See README.md for usage, roadmap, and further details.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio::join;
@@ -80,7 +80,7 @@ struct PoolLease {
 
 #[async_trait]
 trait Requestable {
-    async fn request(&self, request: &Request) -> Result<PoolLease, RequestError>;
+    async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError>;
 }
 
 fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
@@ -112,9 +112,9 @@ fn solve_resource_matches(
 
 #[async_trait]
 impl Requestable for Inventory {
-    async fn request(&self, request: &Request) -> Result<PoolLease, RequestError> {
+    async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError> {
         let mut impossible = true;
-        for pool in &self.pools {
+        for pool in &mut self.pools {
             // TODO: there should be a more functional way to express this
             // skip if request.pool_attributes not a subset of pool.attributes
             if let Some(wanted_attributes) = &request.pool_attributes {
@@ -146,7 +146,7 @@ impl Requestable for Inventory {
                 impossible = false;
             } else {
                 //FIXME make self mutable and set this
-                //pool.user = Some(true);
+                pool.user = Some(true);
                 return Ok(PoolLease {
                     leasetime: 1234, // TODO: read default lease time from config file
                     pool: pool.clone(),
@@ -163,17 +163,17 @@ impl Requestable for Inventory {
 
 struct LocalClient {
     name: String,
-    inventory: Rc<Inventory>
+    inventory: Arc<Mutex<Inventory>>
 }
 impl LocalClient {
     async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
         let mut has_timeout = false;
-        if let Some(timeout) = request.timeout {
+        if let Some(timeout) = request.timeout.clone() {
             has_timeout = true;
             // todo create a timer that we can wait on
         }
         loop {
-            match self.inventory.request(&request).await {
+            match self.inventory.lock().unwrap().request(&request).await {
                 Ok(lease) => { return Ok(lease) }
                 Err(RequestError::InUse) => {
                     if has_timeout {
@@ -193,19 +193,19 @@ impl LocalClient {
 }
 
 pub struct RespoClientFactory {
-    inventory: Rc<Inventory>
+    inventory: Arc<Mutex<Inventory>>
 }
 
 impl RespoClientFactory {
     fn new(inventory: Inventory) -> RespoClientFactory  {
         Self {
-            inventory: Rc::new(inventory)
+            inventory: Arc::new(Mutex::new(inventory))
         }
     }
     fn create(&mut self, name: String) -> LocalClient {
         LocalClient {
             name: name,
-            inventory:  Rc::clone(&self.inventory)
+            inventory:  Arc::clone(&self.inventory)
         }
     }
 }
@@ -248,14 +248,14 @@ mod tests {
     }
     #[tokio::test]
     async fn test_ok_pool_attributes() {
-        let inventory = build_simple_inventory();
+        let mut inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         assert!(inventory.request(&ok_request).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_nok_pool_attributes() {
-        let inventory = build_simple_inventory();
+        let mut inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let nok_request = Request {
             pool_attributes: Some(vec!["attr3".into()]),
@@ -266,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_nok_location() {
-        let inventory = build_simple_inventory();
+        let mut inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let nok_request = Request {
             location: Some("abroad".into()),
@@ -276,7 +276,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
-        let inventory = build_simple_inventory();
+        let mut inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         let ra_ok_request = Request {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
@@ -286,7 +286,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_resource_attributes_mismatch() {
-        let inventory = build_simple_inventory();
+        let mut inventory = build_simple_inventory();
         let ok_request = build_ok_request();
         // Failure case
         let nok_request = Request {
