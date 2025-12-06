@@ -1,3 +1,29 @@
+
+/*!
+Resource Pool Leasing System
+
+This crate provides core logic for a resource leasing system, where clients can request exclusive access to resources
+(such as network-connected equipment test benches) based on attributes and location. The system supports matching
+requests to available resources, handling pool attributes, resource attributes, and location constraints.
+
+Main Components:
+- Resource: Represents an individual entity with attributes and properties.
+- Pool: A collection of resources, with its own attributes and location.
+- Registry: Holds all pools and manages resource allocation.
+- Request: Describes a client's requirements for resource allocation.
+- PoolLease: Represents a successful lease of a pool, including resource pairing.
+- Requestable: Trait for handling resource requests and matching logic.
+
+Matching Logic:
+- Requests are matched against pools and resources using attribute and location constraints.
+- Resource matching uses a simple subset check; assignment problem logic can be extended for optimal pairing.
+
+Unit tests are provided for core matching scenarios.
+
+See README.md for usage, roadmap, and further details.
+*/
+
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 type AttributeSet = Vec<String>;
@@ -48,8 +74,9 @@ struct PoolLease {
     pairing: Option<AttributeMatch>,
 }
 
+#[async_trait]
 trait Requestable {
-    fn request(&self, request: Request) -> Result<PoolLease, RequestError>;
+    async fn request(&self, request: Request) -> Result<PoolLease, RequestError>;
 }
 
 fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
@@ -78,8 +105,10 @@ fn solve_resource_matches(
     }
     Some(matchlist)
 }
+
+#[async_trait]
 impl Requestable for Registry {
-    fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
+    async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
         for pool in &self.pools {
             // TODO: there should be a more functional way to express this
             // skip if request.pool_attributes not a subset of pool.attributes
@@ -148,46 +177,46 @@ mod tests {
             resource_attributes: None,
         }
     }
-    #[test]
-    fn test_ok_pool_attributes() {
+    #[tokio::test]
+    async fn test_ok_pool_attributes() {
         let r = build_simple_registry();
         let ok_request = build_ok_request();
-        assert!(r.request(ok_request).is_ok());
+        assert!(r.request(ok_request).await.is_ok());
     }
 
-    #[test]
-    fn test_nok_pool_attributes() {
+    #[tokio::test]
+    async fn test_nok_pool_attributes() {
         let r = build_simple_registry();
         let ok_request = build_ok_request();
         let nok_request = Request {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).is_err());
+        assert!(r.request(nok_request).await.is_err());
     }
 
-    #[test]
-    fn test_nok_location() {
+    #[tokio::test]
+    async fn test_nok_location() {
         let r = build_simple_registry();
         let ok_request = build_ok_request();
         let nok_request = Request {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).is_err());
+        assert!(r.request(nok_request).await.is_err());
     }
-    #[test]
-    fn test_resource_attributes_match() {
+    #[tokio::test]
+    async fn test_resource_attributes_match() {
         let r = build_simple_registry();
         let ok_request = build_ok_request();
         let ra_ok_request = Request {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
             ..ok_request.clone()
         };
-        assert!(r.request(ra_ok_request.clone()).is_ok());
+        assert!(r.request(ra_ok_request.clone()).await.is_ok());
     }
-    #[test]
-    fn test_resource_attributes_mismatch() {
+    #[tokio::test]
+    async fn test_resource_attributes_mismatch() {
         let r = build_simple_registry();
         let ok_request = build_ok_request();
         // Failure case
@@ -195,6 +224,7 @@ mod tests {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        assert!(r.request(nok_request).is_err());
+        assert!(r.request(nok_request).await.is_err());
     }
+
 }
