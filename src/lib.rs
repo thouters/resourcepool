@@ -31,28 +31,28 @@ use tokio::join;
 
 
 
+const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read default lease time from config file
 
-type AttributeSet = Vec<String>;
+type AttributeSet = Vec<String>; // TODO:  Use BTreeSet
 type AttributeMatch = Vec<(AttributeSet, Resource)>;
 
 #[derive(Debug, Clone)]
 struct Resource {
-    attributes: Vec<String>, // TODO:  Use HashSet
+    attributes: AttributeSet,
     properties: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 struct Pool {
     name: String,
-    attributes: Vec<String>, // TODO:  Use btreeset
+    attributes: AttributeSet,
     location: String,
     resources: Vec<Resource>,
     user: Option<bool>
 }
-// respod manages a pool
+
 #[derive(Debug)]
 struct Inventory {
-    // holding the resources and usage info
     pools: Vec<Pool>,
 }
 
@@ -74,9 +74,11 @@ enum RequestError {
 
 #[derive(Debug, Clone)]
 struct PoolLease {
-    leasetime: u32,
+    leasetime: Duration,
     pool: Pool,
     pairing: Option<AttributeMatch>,
+    // reference to the pool
+    // on drop it should be clearing the  pool.user
 }
 
 #[async_trait]
@@ -92,18 +94,19 @@ fn solve_resource_matches(
     pool: &Pool,
     requested_resources_spec: &Vec<AttributeSet>,
 ) -> Option<AttributeMatch> {
-    // pair up all items from the list so that they match.
     let mut matchlist: AttributeMatch = Vec::new();
 
-    // FIXME: properly implement the assignment problem
+    // TODO: properly implement the assignment problem
     for resource_spec in requested_resources_spec {
         let matching_resources: Vec<&Resource> = pool
             .resources
             .iter()
             .filter(|y: &&Resource| matches(resource_spec, &y.attributes))
             .collect();
+
         if matching_resources.iter().count() > 0 {
-            matchlist.push((resource_spec.clone(), matching_resources[0].clone()));
+            let first_match = matching_resources[0].clone();
+            matchlist.push((resource_spec.clone(), first_match));
         } else {
             return None;
         }
@@ -114,51 +117,45 @@ fn solve_resource_matches(
 #[async_trait]
 impl Requestable for Inventory {
     async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError> {
-        let mut impossible = true;
-        for pool in &mut self.pools {
-            // TODO: there should be a more functional way to express this
-            // skip if request.pool_attributes not a subset of pool.attributes
-            if let Some(wanted_attributes) = &request.pool_attributes {
-                if !wanted_attributes
+        let mut ultimate_failure: RequestError = RequestError::Impossible;
+        for potential_pool in &mut self.pools {
+            // skip if request.pool_attributes not a subset of potential_pool.attributes
+            if let Some(wanted_pool_attributes) = &request.pool_attributes {
+                if !wanted_pool_attributes
                     .iter()
-                    .all(|requested_attribute| pool.attributes.contains(requested_attribute))
+                    .all(|requested_attribute| potential_pool.attributes.contains(requested_attribute))
                 {
                     continue;
                 }
             }
-            // TODO: check there is an unique resource per set of resource_attributes
             if let Some(wanted_location) = &request.location {
-                if *wanted_location != pool.location {
+                if *wanted_location != potential_pool.location {
                     continue;
                 }
             }
             if let Some(requested_resources_spec) = &request.resource_attributes {
-                if let Some(match_) = solve_resource_matches(pool, requested_resources_spec) {
+                if let Some(match_) = solve_resource_matches(potential_pool, requested_resources_spec) {
                     return Ok(PoolLease {
-                        leasetime: 1234, // TODO: read default lease time from config file
-                        pool: pool.clone(),
+                        leasetime: DEFAULT_LEASE_TIME,
+                        pool: potential_pool.clone(),
                         pairing: Some(match_),
                     });
                 } else {
                     continue;
                 }
             }
-            if let Some(_user) = pool.user {
-                impossible = false;
+            if let Some(_user) = potential_pool.user {
+                ultimate_failure = RequestError::InUse;
             } else {
-                //FIXME make self mutable and set this
-                pool.user = Some(true);
+                potential_pool.user = Some(true);
                 return Ok(PoolLease {
-                    leasetime: 1234, // TODO: read default lease time from config file
-                    pool: pool.clone(),
+                    leasetime: DEFAULT_LEASE_TIME,
+                    pool: potential_pool.clone(),
                     pairing: None,
                 });
             }
         }
-        match impossible {
-            true => { Err(RequestError::Impossible) }
-            false => { Err(RequestError::InUse) }
-        }
+        Err(ultimate_failure)
     }
 }
 
@@ -302,7 +299,8 @@ mod tests {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err_and(|x| x == RequestError::Impossible));
+        let result = inventory.request(&nok_request).await;
+        assert!(result.as_ref().is_err_and(|e| *e == RequestError::Impossible), "Unexpected error: {:?}", result.as_ref().unwrap_err());
     }
     #[tokio::test]
     async fn test_concurrent_usage_returns_error() {
