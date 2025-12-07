@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
-use tokio::time::{sleep, Sleep, Duration};
+use tokio::time::{sleep, sleep_until, Sleep, Duration, Instant};
 use tokio::join;
 
 
@@ -64,7 +64,7 @@ struct Request {
     timeout: Option<Duration>
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum RequestError {
     Impossible,
     InUse,
@@ -169,24 +169,23 @@ struct LocalClient {
 }
 impl LocalClient {
     async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
-        let mut timeout_timer: Option<Sleep> = None;
-        if let Some(timeout) = request.timeout.clone() {
-            timeout_timer = Some(sleep(timeout));
-        }
+        let deadline: Option<Instant> = match request.timeout.clone() {
+            Some(timeout) => Some(Instant::now() + timeout),
+            None => { None }
+        };
         loop {
             match self.inventory.lock().unwrap().request(&request).await {
                 Ok(lease) => { return Ok(lease) }
                 Err(RequestError::InUse) => {
-                    if let Some(timeout_timer) = timeout_timer {
+                    if let Some(deadline) = &deadline {
                         tokio::select! {
-                            _ = self.notify.notified() => { 
+                            _ = self.notify.notified() => {
                                 // fall through to retry
                             },
-                            _ = timeout_timer =>  {
+                            _ = sleep_until(deadline.clone()) =>  {
                                 return Err(RequestError::TimeOut);
                             },
                         }
-                        //sleeping on an event that gets notified of changes to the usage
                     } else {
                         return Err(RequestError::InUse);
                     }
@@ -271,7 +270,7 @@ mod tests {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
     }
 
     #[tokio::test]
@@ -282,7 +281,7 @@ mod tests {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
@@ -303,7 +302,7 @@ mod tests {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err());
+        assert!(inventory.request(&nok_request).await.is_err_and(|x| x == RequestError::Impossible));
     }
     #[tokio::test]
     async fn test_concurrent_usage_returns_error() {
@@ -313,17 +312,65 @@ mod tests {
         let client_a = clientfactory.create("client_a".into());
         let client_b = clientfactory.create("client_b".into());
 
-        let a = async {
-            println!("'a' started.");
-            assert!(client_a.request(ok_request.clone()).await.is_ok());
-            sleep(Duration::from_secs(1)).await;
-            println!("'a' finished.");
+        join!(
+            async {
+                assert!(client_a.request(ok_request.clone()).await.is_ok());
+                sleep(Duration::from_secs(1)).await;
+            },
+            async {
+                sleep(Duration::from_millis(100)).await;
+                assert!(client_b.request(ok_request.clone()).await.is_err_and(|e| e == RequestError::InUse));
+            }
+        );
+    }
+    #[tokio::test]
+    async fn test_concurrent_timeout() {
+        // FIXME: test should be using process time instead of walltime
+        let mut clientfactory = build_simple_clientfactory();
+        let ok_request = build_ok_request();
+        let ok_with_timeout = Request {
+            timeout: Some(Duration::from_millis(500)),
+            ..ok_request.clone()
         };
-        let b = async {
-            println!("'b' started.");
-            sleep(Duration::from_millis(100)).await;
-            assert!(client_b.request(ok_request.clone()).await.is_err());
+
+        let client_a = clientfactory.create("client_a".into());
+        let client_b = clientfactory.create("client_b".into());
+
+        join!(
+            async {
+                assert!(client_a.request(ok_request).await.is_ok());
+                sleep(Duration::from_secs(1)).await;
+            },
+            async {
+                sleep(Duration::from_millis(100)).await;
+                assert!(client_b.request(ok_with_timeout).await.is_err_and(|e| e == RequestError::TimeOut));
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_becomes_available() {
+        // FIXME: test should be using process time instead of walltime
+        let mut clientfactory = build_simple_clientfactory();
+        let ok_request = build_ok_request();
+        let ok_with_timeout = Request {
+            timeout: Some(Duration::from_millis(500)),
+            ..ok_request.clone()
         };
-        join!(a, b);
+
+        let client_a = clientfactory.create("client_a".into());
+        let client_b = clientfactory.create("client_b".into());
+
+        join!(
+            async {
+                assert!(client_a.request(ok_request).await.is_ok());
+                sleep(Duration::from_millis(100)).await;
+            },
+            async {
+                sleep(Duration::from_millis(100)).await;
+                let result = client_b.request(ok_with_timeout).await;
+                assert!(result.is_ok(), "Unexpected error: {:?}", result.unwrap_err());
+            }
+        );
     }
 }
