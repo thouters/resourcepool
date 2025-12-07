@@ -56,12 +56,13 @@ struct Inventory {
     pools: Vec<Pool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Request {
     location: Option<String>,
     pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
     resource_attributes: Option<Vec<AttributeSet>>,
-    timeout: Option<Duration>
+    timeout: Option<Duration>,
+    by_name: Option<String> // This will be used to take a pool offline for maintenance
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,6 +142,11 @@ impl Requestable for Inventory {
                         pairing: Some(match_),
                     });
                 } else {
+                    continue;
+                }
+            }
+            if let Some(requested_pool_name) = &request.by_name {
+                if *requested_pool_name != potential_pool.name {
                     continue;
                 }
             }
@@ -246,12 +252,29 @@ mod tests {
     }
     fn build_ok_request() -> Request {
         Request {
-            location: None,
             pool_attributes: Some(vec!["attr1".into()]),
-            resource_attributes: None,
-            timeout: None
+            ..Default::default()
         }
     }
+    #[tokio::test]
+    async fn test_by_name_positive() {
+        let mut inventory = build_simple_inventory();
+        let ok_request = Request {
+            by_name: Some("pool1".into()),
+            ..Default::default()
+        };
+        assert!(inventory.request(&ok_request).await.is_ok());
+    }
+    #[tokio::test]
+    async fn test_by_name_negative() {
+        let mut inventory = build_simple_inventory();
+        let nok_request = Request {
+            by_name: Some("pool_not_there".into()),
+            ..Default::default()
+        };
+        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
+    }
+
     #[tokio::test]
     async fn test_ok_pool_attributes() {
         let mut inventory = build_simple_inventory();
