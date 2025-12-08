@@ -11,7 +11,7 @@ Main Components:
 - Inventory: Holds all pools and manages resource allocation.
 - Request: Describes a client's requirements for resource allocation.
 - PoolLease: Represents a successful lease of a pool, including resource pairing.
-- Requestable: Trait for handling resource requests and matching logic.
+- InventoryRequest: Trait for handling resource requests and matching logic.
 
 Matching Logic:
 - Requests are matched against pools and resources using attribute and location constraints.
@@ -22,14 +22,11 @@ Unit tests are provided for core matching scenarios.
 See README.md for usage, roadmap, and further details.
 */
 
-use async_trait::async_trait;
+//use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc,Mutex,Weak};
 use tokio::sync::Notify;
-use tokio::time::{sleep, sleep_until, Sleep, Duration, Instant};
-use tokio::join;
-
-
+use tokio::time::{sleep_until, Duration, Instant};
 
 const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read default lease time from config file
 
@@ -48,13 +45,16 @@ struct Pool {
     attributes: AttributeSet,
     location: String,
     resources: Vec<Resource>,
-    user: Option<bool>
+    user: Weak<Mutex<InnerClient>>
 }
 
 #[derive(Debug)]
-struct Inventory {
+struct InnerInventory{
+//struct Inventory{
     pools: Vec<Pool>,
 }
+#[derive(Debug,Clone)]
+struct Inventory (Arc<Mutex<InnerInventory>>);
 
 #[derive(Debug, Clone, Default)]
 struct Request {
@@ -78,13 +78,22 @@ struct PoolLease {
     leasetime: Duration,
     pool: Pool,
     pairing: Option<AttributeMatch>,
-    // reference to the pool
-    // on drop it should be clearing the  pool.user
+    notify: Arc<Notify>
 }
 
-#[async_trait]
-trait Requestable {
-    async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError>;
+impl Drop for PoolLease {
+    fn drop(&mut self) {
+        self.notify.notify_waiters()
+    }
+}
+impl Inventory {
+    fn new(inner: InnerInventory) -> Inventory {
+        Inventory(Arc::new(Mutex::new(inner)))
+    }
+}
+//#[async_trait]
+trait InventoryRequest {
+    async fn request(&mut self, request: &Request, client: &Client) -> Result<PoolLease, RequestError>;
 }
 
 fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
@@ -115,11 +124,12 @@ fn solve_resource_matches(
     Some(matchlist)
 }
 
-#[async_trait]
-impl Requestable for Inventory {
-    async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError> {
+//#[async_trait]
+impl InventoryRequest for Inventory {
+    async fn request(&mut self, request: &Request, client: &Client) -> Result<PoolLease, RequestError> {
+        let mut inventory = self.0.lock().unwrap();
         let mut ultimate_failure: RequestError = RequestError::Impossible;
-        for potential_pool in &mut self.pools {
+        for potential_pool in &mut inventory.pools {
             // skip if request.pool_attributes not a subset of potential_pool.attributes
             if let Some(wanted_pool_attributes) = &request.pool_attributes {
                 if !wanted_pool_attributes
@@ -140,6 +150,7 @@ impl Requestable for Inventory {
                         leasetime: DEFAULT_LEASE_TIME,
                         pool: potential_pool.clone(),
                         pairing: Some(match_),
+                        notify: Arc::clone(&client.0.lock().unwrap().notify)
                     });
                 } else {
                     continue;
@@ -150,39 +161,51 @@ impl Requestable for Inventory {
                     continue;
                 }
             }
-            if let Some(_user) = potential_pool.user {
-                ultimate_failure = RequestError::InUse;
-            } else {
-                potential_pool.user = Some(true);
+            if potential_pool.user.upgrade().is_none() {
+                potential_pool.user = Arc::downgrade(client);
                 return Ok(PoolLease {
                     leasetime: DEFAULT_LEASE_TIME,
                     pool: potential_pool.clone(),
                     pairing: None,
+                    notify: Arc::clone(&client.0.lock().unwrap().notify)
                 });
+            } else {
+                ultimate_failure = RequestError::InUse;
             }
         }
         Err(ultimate_failure)
     }
 }
 
-struct LocalClient {
+#[derive(Debug)]
+struct InnerClient {
     name: String,
-    inventory: Arc<Mutex<Inventory>>,
-    notify: Arc<Notify>
+    inventory: Inventory, // needed to make a request
+    notify: Arc<Notify>              // needed to retry a request
 }
-impl LocalClient {
-    async fn request(&self, request: Request) -> Result<PoolLease, RequestError> {
+#[derive(Debug)]
+struct Client (Arc<Mutex<InnerClient>>);
+
+//#[async_trait]
+trait ClientRequest {
+    async fn request<'a>(&mut self, request: &'a Request) -> Result<PoolLease, RequestError>;
+}
+
+//#[async_trait]
+impl ClientRequest for Client {
+    async fn request(&mut self, request: &Request) -> Result<PoolLease, RequestError> {
         let deadline: Option<Instant> = match request.timeout.clone() {
             Some(timeout) => Some(Instant::now() + timeout),
             None => { None }
         };
         loop {
-            match self.inventory.lock().unwrap().request(&request).await {
+            let mut client = self.0.lock().unwrap();
+            match client.inventory.request(request, &self).await {
                 Ok(lease) => { return Ok(lease) }
                 Err(RequestError::InUse) => {
                     if let Some(deadline) = &deadline {
                         tokio::select! {
-                            _ = self.notify.notified() => {
+                            _ = client.notify.notified() => {
                                 // fall through to retry
                             },
                             _ = sleep_until(deadline.clone()) =>  {
@@ -202,32 +225,39 @@ impl LocalClient {
 }
 
 pub struct RespoClientFactory {
-    inventory: Arc<Mutex<Inventory>>,
+    inventory: Inventory,
     notify: Arc<Notify>
+}
+impl Client {
+    fn new(inner: InnerClient) -> Client {
+        Client(Arc::new(Mutex::new(inner)))
+    }
 }
 
 impl RespoClientFactory {
     fn new(inventory: Inventory) -> RespoClientFactory  {
         Self {
-            inventory: Arc::new(Mutex::new(inventory)),
+            inventory: inventory.clone(),
             notify: Arc::new(Notify::new())
         }
     }
-    fn create(&mut self, name: String) -> LocalClient {
-        LocalClient {
+    fn create(&mut self, name: String) -> Client {
+        Client::new( InnerClient {
             name: name,
-            inventory:  Arc::clone(&self.inventory),
-            notify:  Arc::clone(&self.notify)
-        }
+            inventory:  self.inventory.clone(),
+            notify:  self.notify.clone()
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{sleep, Duration};
+    use tokio::join;
 
     fn build_simple_inventory() -> Inventory {
-        Inventory {
+        Inventory::new( InnerInventory{
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -242,9 +272,9 @@ mod tests {
                         properties: HashMap::new(),
                     },
                 ],
-                user: None
+                user: Weak::new()
             }],
-        }
+        })
     }
     fn build_simple_clientfactory() -> RespoClientFactory {
         let inventory = build_simple_inventory();
@@ -256,73 +286,77 @@ mod tests {
             ..Default::default()
         }
     }
+    fn build_simple_client() -> Client {
+        let mut clientfactory = build_simple_clientfactory();
+        clientfactory.create("client_a".into())
+    }
     #[tokio::test]
     async fn test_by_name_positive() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = Request {
             by_name: Some("pool1".into()),
             ..Default::default()
         };
-        assert!(inventory.request(&ok_request).await.is_ok());
+        assert!(client.request(&ok_request).await.is_ok());
     }
     #[tokio::test]
     async fn test_by_name_negative() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let nok_request = Request {
             by_name: Some("pool_not_there".into()),
             ..Default::default()
         };
-        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
+        assert!(client.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
     }
 
     #[tokio::test]
     async fn test_ok_pool_attributes() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = build_ok_request();
-        assert!(inventory.request(&ok_request).await.is_ok());
+        assert!(client.request(&ok_request).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_nok_pool_attributes() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = build_ok_request();
         let nok_request = Request {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
+        assert!(client.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
     }
 
     #[tokio::test]
     async fn test_nok_location() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = build_ok_request();
         let nok_request = Request {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
+        assert!(client.request(&nok_request).await.is_err_and(|e| e == RequestError::Impossible));
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = build_ok_request();
         let ra_ok_request = Request {
             resource_attributes: Some(vec![vec!["RA1".into()]]),
             ..ok_request.clone()
         };
-        assert!(inventory.request(&ra_ok_request.clone()).await.is_ok());
+        assert!(client.request(&ra_ok_request.clone()).await.is_ok());
     }
     #[tokio::test]
     async fn test_resource_attributes_mismatch() {
-        let mut inventory = build_simple_inventory();
+        let mut client = build_simple_client();
         let ok_request = build_ok_request();
         // Failure case
         let nok_request = Request {
             resource_attributes: Some(vec![vec!["RA3".into()]]),
             ..ok_request.clone()
         };
-        let result = inventory.request(&nok_request).await;
+        let result = client.request(&nok_request).await;
         assert!(result.as_ref().is_err_and(|e| *e == RequestError::Impossible), "Unexpected error: {:?}", result.as_ref().unwrap_err());
     }
     #[tokio::test]
@@ -330,17 +364,17 @@ mod tests {
         let mut clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
 
-        let client_a = clientfactory.create("client_a".into());
-        let client_b = clientfactory.create("client_b".into());
+        let mut client_a = clientfactory.create("client_a".into());
+        let mut client_b = clientfactory.create("client_b".into());
 
         join!(
             async {
-                assert!(client_a.request(ok_request.clone()).await.is_ok());
+                assert!(client_a.request(&ok_request.clone()).await.is_ok());
                 sleep(Duration::from_secs(1)).await;
             },
             async {
                 sleep(Duration::from_millis(100)).await;
-                assert!(client_b.request(ok_request.clone()).await.is_err_and(|e| e == RequestError::InUse));
+                assert!(client_b.request(&ok_request.clone()).await.is_err_and(|e| e == RequestError::InUse));
             }
         );
     }
@@ -354,17 +388,17 @@ mod tests {
             ..ok_request.clone()
         };
 
-        let client_a = clientfactory.create("client_a".into());
-        let client_b = clientfactory.create("client_b".into());
+        let mut client_a = clientfactory.create("client_a".into());
+        let mut client_b = clientfactory.create("client_b".into());
 
         join!(
             async {
-                assert!(client_a.request(ok_request).await.is_ok());
+                assert!(client_a.request(&ok_request).await.is_ok());
                 sleep(Duration::from_secs(1)).await;
             },
             async {
                 sleep(Duration::from_millis(100)).await;
-                assert!(client_b.request(ok_with_timeout).await.is_err_and(|e| e == RequestError::TimeOut));
+                assert!(client_b.request(&ok_with_timeout).await.is_err_and(|e| e == RequestError::TimeOut));
             }
         );
     }
@@ -379,17 +413,17 @@ mod tests {
             ..ok_request.clone()
         };
 
-        let client_a = clientfactory.create("client_a".into());
-        let client_b = clientfactory.create("client_b".into());
+        let mut client_a = clientfactory.create("client_a".into());
+        let mut client_b = clientfactory.create("client_b".into());
 
         join!(
             async {
-                assert!(client_a.request(ok_request).await.is_ok());
+                assert!(client_a.request(&ok_request).await.is_ok());
                 sleep(Duration::from_millis(100)).await;
             },
             async {
                 sleep(Duration::from_millis(100)).await;
-                let result = client_b.request(ok_with_timeout).await;
+                let result = client_b.request(&ok_with_timeout).await;
                 assert!(result.is_ok(), "Unexpected error: {:?}", result.unwrap_err());
             }
         );
