@@ -1,59 +1,59 @@
-
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::borrow::Cow;
 
 use http_body_util::Full;
-use hyper::body::{Bytes};
+use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
+use rp::respo::{
+    Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest, RespoClientFactory,
+};
+use std::sync::Weak;
 use tokio::net::TcpListener;
+use tokio::time::Duration;
 use url::Url;
-use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ResourceRequestError, ClientResourceRequest};
-use std::sync::{Arc, Weak};
-use tokio::time::{ Duration };
 
 fn build_simple_inventory() -> Inventory {
-	Inventory::new( vec![Pool {
-			name: "pool1".into(),
-			attributes: vec!["attr1".into(), "attr2".into()],
-			location: "location1".into(),
-			resources: vec![
-				Resource {
-					attributes: vec!["RA1".into(), "RA2".into()],
-					properties: HashMap::new(),
-				},
-				Resource {
-					attributes: vec!["RB1".into(), "RB2".into()],
-					properties: HashMap::new(),
-				},
-			],
-			user: Weak::new()
-		}]
-	)
+    Inventory::new(vec![Pool {
+        name: "pool1".into(),
+        attributes: vec!["attr1".into(), "attr2".into()],
+        location: "location1".into(),
+        resources: vec![
+            Resource {
+                attributes: vec!["RA1".into(), "RA2".into()],
+                properties: HashMap::new(),
+            },
+            Resource {
+                attributes: vec!["RB1".into(), "RB2".into()],
+                properties: HashMap::new(),
+            },
+        ],
+        user: Weak::new(),
+    }])
 }
 fn build_simple_clientfactory() -> RespoClientFactory {
-	let inventory = build_simple_inventory();
-	RespoClientFactory::new(inventory)
-}
-fn build_ok_request() -> ResourceRequest {
-	ResourceRequest {
-		pool_attributes: Some(vec!["attr1".into()]),
-		..Default::default()
-	}
+    let inventory = build_simple_inventory();
+    RespoClientFactory::new(inventory)
 }
 fn build_simple_client() -> Client {
-	let mut clientfactory = build_simple_clientfactory();
-	clientfactory.create("client_a".into())
+    let mut clientfactory = build_simple_clientfactory();
+    clientfactory.create("client_a".into())
 }
 
-async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-	let uri_string = request.uri().to_string();
-	let request_url = Url::parse("http://localhost").unwrap().join(&uri_string).unwrap();
-	let params = request_url.query_pairs();
+async fn handle_request(
+    _inventory: Inventory,
+    request: Request<hyper::body::Incoming>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    let uri_string = request.uri().to_string();
+    let request_url = Url::parse("http://localhost")
+        .unwrap()
+        .join(&uri_string)
+        .unwrap();
+    let params = request_url.query_pairs();
     if params.count() == 0 {
         return Ok(Response::new(Full::new(Bytes::from("No value specified"))));
     }
@@ -61,17 +61,13 @@ async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Inc
 
     for (key, value) in params {
         match key {
-           Cow::Borrowed(key) if key == "location" => {
-                request.location = Some(String::from(value))
-           }
-           Cow::Borrowed(key) if key == "by_name" => {
-                request.by_name = Some(String::from(value))
-           }
-           Cow::Borrowed(key) if key == "pool_attributes" => {
+            Cow::Borrowed("location") => request.location = Some(String::from(value)),
+            Cow::Borrowed("by_name") => request.by_name = Some(String::from(value)),
+            Cow::Borrowed("pool_attributes") => {
                 let attribute_list: Vec<String> = value.split(",").map(String::from).collect();
                 request.pool_attributes = Some(attribute_list);
-           }
-           Cow::Borrowed(key) if key.starts_with("resource_attributes") => {
+            }
+            Cow::Borrowed("resource_attributes") => {
                 let resource_attributes: Vec<String> = value.split(",").map(String::from).collect();
                 match &mut request.resource_attributes {
                     None => {
@@ -81,22 +77,25 @@ async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Inc
                         existing_list.push(resource_attributes);
                     }
                 }
-           }
-           Cow::Borrowed(key) if key == "timeout" => {
+            }
+            Cow::Borrowed("timeout") => {
                 let value = value.parse::<u64>();
                 match value {
                     Ok(value) => {
-                        let value = Duration::new(value,0);
+                        let value = Duration::new(value, 0);
                         request.timeout = Some(value);
                     }
                     Err(e) => {
-                        return Ok(Response::new(Full::new(Bytes::from(format!("parse error: {:?}",e)))));
+                        return Ok(Response::new(Full::new(Bytes::from(format!(
+                            "parse error: {:?}",
+                            e
+                        )))));
                     }
-               }
-           }
-           _ => {
-               todo!("error");
-           }
+                }
+            }
+            _ => {
+                todo!("error");
+            }
         }
     }
     dbg!(&request);
@@ -107,15 +106,17 @@ async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Inc
         Ok(lease) => {
             let json = serde_json::to_string_pretty(&lease);
             match json {
-                Ok(json) => { Ok(Response::new(Full::new(Bytes::from(json))))}
-                Err(x) => {
-                    Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
-                }
+                Ok(json) => Ok(Response::new(Full::new(Bytes::from(json)))),
+                Err(x) => Ok(Response::new(Full::new(Bytes::from(format!(
+                    "got an error: {:?}",
+                    x
+                ))))),
             }
         }
-        Err(x) => {
-            Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
-        }
+        Err(x) => Ok(Response::new(Full::new(Bytes::from(format!(
+            "got an error: {:?}",
+            x
+        ))))),
     }
 }
 
@@ -141,14 +142,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Finally, we bind the incoming connection to our `hello` service
             if let Err(err) = http1::Builder::new()
                 // `service_fn` converts our function in a `Service`
-                .serve_connection(io, service_fn(
-                move |req: Request<hyper::body::Incoming>| {
-                let onion2 = onion1.clone();
-                async move {
-                    handle_request(onion2, req).await
-                }
-                }
-                ))
+                .serve_connection(
+                    io,
+                    service_fn(move |req: Request<hyper::body::Incoming>| {
+                        let onion2 = onion1.clone();
+                        async move { handle_request(onion2, req).await }
+                    }),
+                )
                 .await
             {
                 eprintln!("Error serving connection: {:?}", err);
@@ -156,4 +156,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
 }
-

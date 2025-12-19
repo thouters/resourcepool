@@ -1,159 +1,55 @@
-
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::borrow::Cow;
-
-use http_body_util::Full;
-use hyper::body::{Bytes};
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response};
+use http_body_util::Empty;
+use hyper::Request;
+use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use url::Url;
-use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ClientResourceRequest};
-use std::sync::Weak;
-use tokio::time::{ Duration };
-
-fn build_simple_inventory() -> Inventory {
-	Inventory::new( vec![Pool {
-			name: "pool1".into(),
-			attributes: vec!["attr1".into(), "attr2".into()],
-			location: "location1".into(),
-			resources: vec![
-				Resource {
-					attributes: vec!["RA1".into(), "RA2".into()],
-					properties: HashMap::new(),
-				},
-				Resource {
-					attributes: vec!["RB1".into(), "RB2".into()],
-					properties: HashMap::new(),
-				},
-			],
-			user: Weak::new()
-		}]
-	)
-}
-fn build_simple_clientfactory() -> RespoClientFactory {
-	let inventory = build_simple_inventory();
-	RespoClientFactory::new(inventory)
-}
-fn build_ok_request() -> ResourceRequest {
-	ResourceRequest {
-		pool_attributes: Some(vec!["attr1".into()]),
-		..Default::default()
-	}
-}
-fn build_simple_client() -> Client {
-	let mut clientfactory = build_simple_clientfactory();
-	clientfactory.create("client_a".into())
-}
-
-async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-	let uri_string = request.uri().to_string();
-	let request_url = Url::parse("http://localhost").unwrap().join(&uri_string).unwrap();
-	let params = request_url.query_pairs();
-    if params.count() == 0 {
-        return Ok(Response::new(Full::new(Bytes::from("No value specified"))));
-    }
-    let mut request = ResourceRequest::default();
-
-    for (key, value) in params {
-        match key {
-           Cow::Borrowed(key) if key == "location" => {
-                request.location = Some(String::from(value))
-           }
-           Cow::Borrowed(key) if key == "by_name" => {
-                request.by_name = Some(String::from(value))
-           }
-           Cow::Borrowed(key) if key == "pool_attributes" => {
-                let attribute_list: Vec<String> = value.split(",").map(String::from).collect();
-                request.pool_attributes = Some(attribute_list);
-           }
-           Cow::Borrowed(key) if key.starts_with("resource_attributes") => {
-                let resource_attributes: Vec<String> = value.split(",").map(String::from).collect();
-                match &mut request.resource_attributes {
-                    None => {
-                        request.resource_attributes = Some(vec![resource_attributes]);
-                    }
-                    Some(existing_list) => {
-                        existing_list.push(resource_attributes);
-                    }
-                }
-           }
-           Cow::Borrowed(key) if key == "timeout" => {
-                let value = value.parse::<u64>();
-                match value {
-                    Ok(value) => {
-                        let value = Duration::new(value,0);
-                        request.timeout = Some(value);
-                    }
-                    Err(e) => {
-                        return Ok(Response::new(Full::new(Bytes::from(format!("parse error: {:?}",e)))));
-                    }
-               }
-           }
-           _ => {
-               todo!("error");
-           }
-        }
-    }
-    dbg!(&request);
-
-    let mut client_a = build_simple_client();
-    let lease = client_a.request(&request).await;
-    match lease {
-        Ok(lease) => {
-            let json = serde_json::to_string_pretty(&lease);
-            match json {
-                Ok(json) => { Ok(Response::new(Full::new(Bytes::from(json))))}
-                Err(x) => {
-                    Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
-                }
-            }
-        }
-        Err(x) => {
-            Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
-        }
-    }
-}
+use tokio::net::TcpStream;
+//use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ClientResourceRequest};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Parse our URL...
+    let url = "http://localhost:3000/request".parse::<hyper::Uri>()?;
 
-    // We create a TcpListener and bind it to 127.0.0.1:3000
-    let listener = TcpListener::bind(addr).await?;
+    // Get the host and the port
+    let host = url.host().expect("uri has no host");
+    let port = url.port_u16().unwrap_or(80);
 
-    let inventory = build_simple_inventory();
-    // We start a loop to continuously accept incoming connections
-    loop {
-        let onion1 = inventory.clone();
-        let (stream, _) = listener.accept().await?;
+    let address = format!("{}:{}", host, port);
 
-        // Use an adapter to access something implementing `tokio::io` traits as if they implement
-        // `hyper::rt` IO traits.
-        let io = TokioIo::new(stream);
+    // Open a TCP connection to the remote host
+    let stream = TcpStream::connect(address)
+        .await
+        .expect("unable to connect");
 
-        // Spawn a tokio task to serve multiple connections concurrently
-        tokio::task::spawn(async move {
-            // Finally, we bind the incoming connection to our `hello` service
-            if let Err(err) = http1::Builder::new()
-                // `service_fn` converts our function in a `Service`
-                .serve_connection(io, service_fn(
-                move |req: Request<hyper::body::Incoming>| {
-                let onion2 = onion1.clone();
-                async move {
-                    handle_request(onion2, req).await
-                }
-                }
-                ))
-                .await
-            {
-                eprintln!("Error serving connection: {:?}", err);
-            }
-        });
-    }
+    // Use an adapter to access something implementing `tokio::io` traits as if they implement
+    // `hyper::rt` IO traits.
+    let io = TokioIo::new(stream);
+
+    // Create the Hyper client
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .expect("create client failed");
+
+    // Spawn a task to poll the connection, driving the HTTP state
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            println!("Connection failed: {:?}", err);
+        }
+    });
+
+    // The authority of our URL will be the hostname of the httpbin remote
+    let authority = url.authority().unwrap().clone();
+
+    // Create an HTTP request with an empty body and a HOST header
+    let req = Request::builder()
+        .uri(url)
+        .header(hyper::header::HOST, authority.as_str())
+        .body(Empty::<Bytes>::new())
+        .expect("failed to create request");
+
+    // Await the response...
+    let res = sender.send_request(req).await.expect("response error");
+
+    println!("Response status: {}", res.status());
+    Ok(())
 }
-

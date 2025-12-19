@@ -24,272 +24,283 @@ See README.md for usage, roadmap, and further details.
 
 pub mod respo {
 
-use std::collections::HashMap;
-use std::sync::{Arc, Weak};
-use tokio::sync::{Notify, Mutex};
-use tokio::time::{sleep_until, Duration, Instant};
-use serde::{Serialize, Deserialize};
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Weak};
+    use tokio::sync::{Mutex, Notify};
+    use tokio::time::{Duration, Instant, sleep_until};
 
-const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read default lease time from config file
+    const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read default lease time from config file
 
-type AttributeSet = Vec<String>; // TODO:  Use BTreeSet
-type AttributeMatch = Vec<(AttributeSet, Resource)>;
+    type AttributeSet = Vec<String>; // TODO:  Use BTreeSet
+    type AttributeMatch = Vec<(AttributeSet, Resource)>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Resource {
-    pub attributes: AttributeSet,
-    pub properties: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Pool {
-    pub name: String,
-    pub attributes: AttributeSet,
-    pub location: String,
-    pub resources: Vec<Resource>,
-    #[serde(skip_serializing,skip_deserializing)]
-    pub user: Weak<Mutex<InnerClient>>
-}
-
-#[derive(Debug, Deserialize)]
-pub struct InnerInventory{
-    pools: Vec<Pool>,
-}
-#[derive(Debug,Clone)]
-pub struct Inventory (pub Arc<Mutex<InnerInventory>>);
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct ResourceRequest {
-    pub location: Option<String>,
-    pub pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
-    pub resource_attributes: Option<Vec<AttributeSet>>,
-    pub timeout: Option<Duration>,
-    pub by_name: Option<String> // This will be used to take a pool offline for maintenance
-}
-
-#[derive(Debug, Serialize)]
-pub enum ResourceRequestError {
-    Impossible,
-    InUse,
-    TimeOut
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PoolLease {
-    leasetime: Duration,
-    pool: Pool,
-    pairing: Option<AttributeMatch>,
-    #[serde(skip_serializing,skip_deserializing)]
-    notify: Arc<Notify>
-}
-
-impl Drop for PoolLease {
-    fn drop(&mut self) {
-        println!("notifying waiters");
-        self.notify.notify_waiters()
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Resource {
+        pub attributes: AttributeSet,
+        pub properties: HashMap<String, String>,
     }
-}
-impl Inventory {
-    pub fn new(pools: Vec<Pool>) -> Inventory {
-        Inventory(Arc::new(Mutex::new(
-        InnerInventory {
-            pools: pools
-        }
-        )))
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Pool {
+        pub name: String,
+        pub attributes: AttributeSet,
+        pub location: String,
+        pub resources: Vec<Resource>,
+        #[serde(skip_serializing, skip_deserializing)]
+        pub user: Weak<Mutex<InnerClient>>,
     }
-}
-//#[async_trait]
-pub trait InventoryResourceRequest {
-    async fn request(&mut self, request: &ResourceRequest, client: &Arc<tokio::sync::Mutex<InnerClient>>, client_notify: &Arc<Notify>) -> Result<PoolLease, ResourceRequestError> ;
-}
 
-fn matches(subset: &Vec<String>, superset: &Vec<String>) -> bool {
-    subset.iter().all(|x| superset.contains(x))
-}
+    #[derive(Debug, Deserialize)]
+    pub struct InnerInventory {
+        pools: Vec<Pool>,
+    }
+    #[derive(Debug, Clone)]
+    pub struct Inventory(pub Arc<Mutex<InnerInventory>>);
 
-fn solve_resource_matches(
-    pool: &Pool,
-    requested_resources_spec: &Vec<AttributeSet>,
-) -> Option<AttributeMatch> {
-    let mut matchlist: AttributeMatch = Vec::new();
+    #[derive(Debug, Clone, Default, Serialize)]
+    pub struct ResourceRequest {
+        pub location: Option<String>,
+        pub pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
+        pub resource_attributes: Option<Vec<AttributeSet>>,
+        pub timeout: Option<Duration>,
+        pub by_name: Option<String>, // This will be used to take a pool offline for maintenance
+    }
 
-    // TODO: properly implement the assignment problem
-    for resource_spec in requested_resources_spec {
-        let matching_resources: Vec<&Resource> = pool
-            .resources
-            .iter()
-            .filter(|y: &&Resource| matches(resource_spec, &y.attributes))
-            .collect();
+    #[derive(Debug, Serialize)]
+    pub enum ResourceRequestError {
+        Impossible,
+        InUse,
+        TimeOut,
+    }
 
-        if matching_resources.iter().count() > 0 {
-            let first_match = matching_resources[0].clone();
-            matchlist.push((resource_spec.clone(), first_match));
-        } else {
-            return None;
+    #[derive(Debug, Clone, Serialize)]
+    pub struct PoolLease {
+        leasetime: Duration,
+        pool: Pool,
+        pairing: Option<AttributeMatch>,
+        #[serde(skip_serializing, skip_deserializing)]
+        notify: Arc<Notify>,
+    }
+
+    impl Drop for PoolLease {
+        fn drop(&mut self) {
+            println!("notifying waiters");
+            self.notify.notify_waiters()
         }
     }
-    Some(matchlist)
-}
+    impl Inventory {
+        pub fn new(pools: Vec<Pool>) -> Inventory {
+            Inventory(Arc::new(Mutex::new(InnerInventory { pools })))
+        }
+    }
+    //#[async_trait]
+    pub trait InventoryResourceRequest {
+        fn request(
+            &mut self,
+            request: &ResourceRequest,
+            client: &Arc<tokio::sync::Mutex<InnerClient>>,
+            client_notify: &Arc<Notify>,
+        ) -> impl std::future::Future<Output = Result<PoolLease, ResourceRequestError>> + Send;
+    }
 
-//#[async_trait]
-impl InventoryResourceRequest for Inventory {
-    async fn request(&mut self, request: &ResourceRequest, client: &Arc<tokio::sync::Mutex<InnerClient>>, client_notify: &Arc<Notify>) -> Result<PoolLease, ResourceRequestError> {
-        let mut inventory = self.0.lock().await;
-        let mut ultimate_failure: ResourceRequestError = ResourceRequestError::Impossible;
-        for potential_pool in &mut inventory.pools {
-            // skip if request.pool_attributes not a subset of potential_pool.attributes
-            if let Some(wanted_pool_attributes) = &request.pool_attributes {
-                if !wanted_pool_attributes
-                    .iter()
-                    .all(|requested_attribute| potential_pool.attributes.contains(requested_attribute))
+    fn matches(subset: &[String], superset: &[String]) -> bool {
+        subset.iter().all(|x| superset.contains(x))
+    }
+
+    fn solve_resource_matches(
+        pool: &Pool,
+        requested_resources_spec: &Vec<AttributeSet>,
+    ) -> Option<AttributeMatch> {
+        let mut matchlist: AttributeMatch = Vec::new();
+
+        // TODO: properly implement the assignment problem
+        for resource_spec in requested_resources_spec {
+            let matching_resources: Vec<&Resource> = pool
+                .resources
+                .iter()
+                .filter(|y: &&Resource| matches(resource_spec, &y.attributes))
+                .collect();
+
+            if matching_resources.iter().len() > 0 {
+                let first_match = matching_resources[0].clone();
+                matchlist.push((resource_spec.clone(), first_match));
+            } else {
+                return None;
+            }
+        }
+        Some(matchlist)
+    }
+
+    //#[async_trait]
+    impl InventoryResourceRequest for Inventory {
+        async fn request(
+            &mut self,
+            request: &ResourceRequest,
+            client: &Arc<tokio::sync::Mutex<InnerClient>>,
+            client_notify: &Arc<Notify>,
+        ) -> Result<PoolLease, ResourceRequestError> {
+            let mut inventory = self.0.lock().await;
+            let mut ultimate_failure: ResourceRequestError = ResourceRequestError::Impossible;
+            for potential_pool in &mut inventory.pools {
+                // skip if request.pool_attributes not a subset of potential_pool.attributes
+                if let Some(wanted_pool_attributes) = &request.pool_attributes
+                    && !wanted_pool_attributes.iter().all(|requested_attribute| {
+                        potential_pool.attributes.contains(requested_attribute)
+                    })
                 {
                     continue;
                 }
-            }
-            if let Some(wanted_location) = &request.location {
-                if *wanted_location != potential_pool.location {
+                if let Some(wanted_location) = &request.location
+                    && *wanted_location != potential_pool.location
+                {
                     continue;
                 }
-            }
-            if let Some(requested_resources_spec) = &request.resource_attributes {
-                if let Some(match_) = solve_resource_matches(potential_pool, requested_resources_spec) {
+                if let Some(requested_resources_spec) = &request.resource_attributes {
+                    if let Some(match_) =
+                        solve_resource_matches(potential_pool, requested_resources_spec)
+                    {
+                        return Ok(PoolLease {
+                            leasetime: DEFAULT_LEASE_TIME,
+                            pool: potential_pool.clone(),
+                            pairing: Some(match_),
+                            notify: Arc::clone(client_notify),
+                        });
+                    } else {
+                        continue;
+                    }
+                }
+                if let Some(requested_pool_name) = &request.by_name
+                    && *requested_pool_name != potential_pool.name
+                {
+                    continue;
+                }
+                if potential_pool.user.upgrade().is_none() {
+                    println!("claiming item");
+                    potential_pool.user = Arc::downgrade(client);
                     return Ok(PoolLease {
                         leasetime: DEFAULT_LEASE_TIME,
                         pool: potential_pool.clone(),
-                        pairing: Some(match_),
-                        notify: Arc::clone(&client_notify)
+                        pairing: None,
+                        notify: Arc::clone(client_notify),
                     });
                 } else {
-                    continue;
+                    println!("item is in use");
+                    ultimate_failure = ResourceRequestError::InUse;
                 }
             }
-            if let Some(requested_pool_name) = &request.by_name {
-                if *requested_pool_name != potential_pool.name {
-                    continue;
-                }
-            }
-            if potential_pool.user.upgrade().is_none() {
-                println!("claiming item");
-                potential_pool.user = Arc::downgrade(client);
-                return Ok(PoolLease {
-                    leasetime: DEFAULT_LEASE_TIME,
-                    pool: potential_pool.clone(),
-                    pairing: None,
-                    notify: Arc::clone(&client_notify)
-                });
-            } else {
-                println!("item is in use");
-                ultimate_failure = ResourceRequestError::InUse;
-            }
+            Err(ultimate_failure)
         }
-        Err(ultimate_failure)
     }
-}
 
-#[derive(Debug)]
-pub struct InnerClient {
-    pub name: String,
-    pub inventory: Inventory, // needed to make a request
-    pub notify: Arc<Notify>   // needed to retry a request
-}
-#[derive(Debug)]
-pub struct Client (Arc<Mutex<InnerClient>>);
+    #[derive(Debug)]
+    pub struct InnerClient {
+        pub name: String,
+        pub inventory: Inventory, // needed to make a request
+        pub notify: Arc<Notify>,  // needed to retry a request
+    }
+    #[derive(Debug)]
+    pub struct Client(Arc<Mutex<InnerClient>>);
 
-//#[async_trait]
-pub trait ClientResourceRequest {
-    async fn request<'a>(&mut self, request: &'a ResourceRequest) -> Result<PoolLease, ResourceRequestError>;
-}
+    //#[async_trait]
+    pub trait ClientResourceRequest {
+        fn request(
+            &mut self,
+            request: &ResourceRequest,
+        ) -> impl std::future::Future<Output = Result<PoolLease, ResourceRequestError>> + Send;
+    }
 
-//#[async_trait]
-impl ClientResourceRequest for Client {
-    async fn request(&mut self, request: &ResourceRequest) -> Result<PoolLease, ResourceRequestError> {
-        let deadline: Option<Instant> = match request.timeout.clone() {
-            Some(timeout) => Some(Instant::now() + timeout),
-            None => { None }
-        };
-        println!("trying to claim {:?} until {:?}", &request, &deadline);
-        loop {
-            let mut client = self.0.lock().await;
-            let notify = client.notify.clone();
-            match client.inventory.request(request, &self.0, &notify).await {
-                Ok(lease) => { return Ok(lease) }
-                Err(ResourceRequestError::InUse) => {
-                    drop(client);
-                    if let Some(deadline) = &deadline {
-                        tokio::select! {
-                            _ = notify.notified() => {
-                                // fall through to retry
-                            },
-                            _ = sleep_until(deadline.clone()) =>  {
-                                return Err(ResourceRequestError::TimeOut);
-                            },
+    //#[async_trait]
+    impl ClientResourceRequest for Client {
+        async fn request(
+            &mut self,
+            request: &ResourceRequest,
+        ) -> Result<PoolLease, ResourceRequestError> {
+            let deadline = request.timeout.map(|timeout| Instant::now() + timeout);
+            println!("trying to claim {:?} until {:?}", &request, &deadline);
+            loop {
+                let mut client = self.0.lock().await;
+                let notify = client.notify.clone();
+                match client.inventory.request(request, &self.0, &notify).await {
+                    Ok(lease) => return Ok(lease),
+                    Err(ResourceRequestError::InUse) => {
+                        drop(client);
+                        if let Some(deadline) = &deadline {
+                            tokio::select! {
+                                _ = notify.notified() => {
+                                    // fall through to retry
+                                },
+                                _ = sleep_until(*deadline) =>  {
+                                    return Err(ResourceRequestError::TimeOut);
+                                },
+                            }
+                        } else {
+                            return Err(ResourceRequestError::InUse);
                         }
-                    } else {
-                        return Err(ResourceRequestError::InUse);
+                    }
+                    Err(other) => {
+                        return Err(other);
                     }
                 }
-                Err(other) => {
-                    return Err(other);
-                }
             }
         }
     }
-}
 
-pub struct RespoClientFactory {
-    inventory: Inventory,
-    notify: Arc<Notify>
-}
-impl Client {
-    fn new(inner: InnerClient) -> Client {
-        Client(Arc::new(Mutex::new(inner)))
+    pub struct RespoClientFactory {
+        inventory: Inventory,
+        notify: Arc<Notify>,
     }
-}
-
-impl RespoClientFactory {
-    pub fn new(inventory: Inventory) -> RespoClientFactory  {
-        Self {
-            inventory: inventory.clone(),
-            notify: Arc::new(Notify::new())
+    impl Client {
+        fn new(inner: InnerClient) -> Client {
+            Client(Arc::new(Mutex::new(inner)))
         }
     }
-    pub fn create(&mut self, name: String) -> Client {
-        Client::new( InnerClient {
-            name: name,
-            inventory:  self.inventory.clone(),
-            notify:  self.notify.clone()
-        })
+
+    impl RespoClientFactory {
+        pub fn new(inventory: Inventory) -> RespoClientFactory {
+            Self {
+                inventory: inventory.clone(),
+                notify: Arc::new(Notify::new()),
+            }
+        }
+        pub fn create(&mut self, name: String) -> Client {
+            Client::new(InnerClient {
+                name,
+                inventory: self.inventory.clone(),
+                notify: self.notify.clone(),
+            })
+        }
     }
-}
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
-    use tokio::join;
-    use std::sync::{Weak};
-    use respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ResourceRequestError, ClientResourceRequest};
+    use respo::{
+        Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest,
+        ResourceRequestError, RespoClientFactory,
+    };
     use std::collections::HashMap;
+    use std::sync::Weak;
+    use tokio::join;
+    use tokio::time::{Duration, sleep};
 
     fn build_simple_inventory() -> Inventory {
-        Inventory::new(
-            vec![Pool {
-                name: "pool1".into(),
-                attributes: vec!["attr1".into(), "attr2".into()],
-                location: "location1".into(),
-                resources: vec![
-                    Resource {
-                        attributes: vec!["RA1".into(), "RA2".into()],
-                        properties: HashMap::new(),
-                    },
-                    Resource {
-                        attributes: vec!["RB1".into(), "RB2".into()],
-                        properties: HashMap::new(),
-                    },
-                ],
-                user: Weak::new()
-            }]
-        )
+        Inventory::new(vec![Pool {
+            name: "pool1".into(),
+            attributes: vec!["attr1".into(), "attr2".into()],
+            location: "location1".into(),
+            resources: vec![
+                Resource {
+                    attributes: vec!["RA1".into(), "RA2".into()],
+                    properties: HashMap::new(),
+                },
+                Resource {
+                    attributes: vec!["RB1".into(), "RB2".into()],
+                    properties: HashMap::new(),
+                },
+            ],
+            user: Weak::new(),
+        }])
     }
     fn build_simple_clientfactory() -> RespoClientFactory {
         let inventory = build_simple_inventory();
@@ -321,7 +332,10 @@ mod tests {
             by_name: Some("pool_not_there".into()),
             ..Default::default()
         };
-        assert!(matches!(client.request(&nok_request).await, Err(ResourceRequestError::Impossible)));
+        assert!(matches!(
+            client.request(&nok_request).await,
+            Err(ResourceRequestError::Impossible)
+        ));
     }
 
     #[tokio::test]
@@ -339,7 +353,10 @@ mod tests {
             pool_attributes: Some(vec!["attr3".into()]),
             ..ok_request.clone()
         };
-        assert!(matches!(client.request(&nok_request).await, Err(ResourceRequestError::Impossible)));
+        assert!(matches!(
+            client.request(&nok_request).await,
+            Err(ResourceRequestError::Impossible)
+        ));
     }
 
     #[tokio::test]
@@ -350,7 +367,10 @@ mod tests {
             location: Some("abroad".into()),
             ..ok_request.clone()
         };
-        assert!(matches!(client.request(&nok_request).await, Err(ResourceRequestError::Impossible)));
+        assert!(matches!(
+            client.request(&nok_request).await,
+            Err(ResourceRequestError::Impossible)
+        ));
     }
     #[tokio::test]
     async fn test_resource_attributes_match() {
@@ -372,7 +392,11 @@ mod tests {
             ..ok_request.clone()
         };
         let result = client.request(&nok_request).await;
-        assert!(matches!(result.as_ref(), Err(ResourceRequestError::Impossible)), "Unexpected error: {:?}", result.as_ref().unwrap_err());
+        assert!(
+            matches!(result.as_ref(), Err(ResourceRequestError::Impossible)),
+            "Unexpected error: {:?}",
+            result.as_ref().unwrap_err()
+        );
     }
     #[tokio::test]
     async fn test_concurrent_usage_returns_error() {
@@ -389,7 +413,10 @@ mod tests {
             },
             async {
                 sleep(Duration::from_millis(100)).await;
-                assert!(matches!(client_b.request(&ok_request.clone()).await, Err(ResourceRequestError::InUse)));
+                assert!(matches!(
+                    client_b.request(&ok_request.clone()).await,
+                    Err(ResourceRequestError::InUse)
+                ));
             }
         );
     }
@@ -412,7 +439,10 @@ mod tests {
             },
             async move {
                 sleep(Duration::from_millis(100)).await;
-                assert!(matches!(client_b.request(&ok_with_timeout).await, Err(ResourceRequestError::TimeOut)));
+                assert!(matches!(
+                    client_b.request(&ok_with_timeout).await,
+                    Err(ResourceRequestError::TimeOut)
+                ));
             }
         );
     }
@@ -439,7 +469,11 @@ mod tests {
             async move {
                 sleep(Duration::from_millis(100)).await;
                 let result = client_b.request(&ok_with_timeout).await;
-                assert!(result.is_ok(), "Unexpected error: {:?}", result.unwrap_err());
+                assert!(
+                    result.is_ok(),
+                    "Unexpected error: {:?}",
+                    result.unwrap_err()
+                );
             }
         );
     }
