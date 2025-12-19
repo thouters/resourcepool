@@ -51,7 +51,6 @@ pub struct Pool {
 
 #[derive(Debug)]
 pub struct InnerInventory{
-//struct Inventory{
     pools: Vec<Pool>,
 }
 #[derive(Debug,Clone)]
@@ -188,7 +187,7 @@ impl InventoryResourceRequest for Inventory {
 pub struct InnerClient {
     pub name: String,
     pub inventory: Inventory, // needed to make a request
-    pub notify: Arc<Notify>              // needed to retry a request
+    pub notify: Arc<Notify>   // needed to retry a request
 }
 #[derive(Debug)]
 pub struct Client (Arc<Mutex<InnerClient>>);
