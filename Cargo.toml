@@ -2,9 +2,15 @@
 name = "rp"
 version = "0.1.0"
 edition = "2024"
+[toolchain]
+channel = "nightly-2025-12-08"
+components = ["rustfmt", "clippy", "rust-analyzer"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
-hyper = "1.8.1"
+url = "1.7.2"
+hyper = { version = "1.8.1", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
