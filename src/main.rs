@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::borrow::Cow;
 
 use http_body_util::Full;
 use hyper::body::{Bytes};
@@ -13,6 +14,7 @@ use tokio::net::TcpListener;
 use url::Url;
 use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ResourceRequestError, ClientResourceRequest};
 use std::sync::{Arc, Weak};
+use tokio::time::{ Duration };
 
 fn build_simple_inventory() -> Inventory {
 	Inventory::new( vec![Pool {
@@ -52,34 +54,67 @@ async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Inc
 	let uri_string = request.uri().to_string();
 	let request_url = Url::parse("http://localhost").unwrap().join(&uri_string).unwrap();
 	let params = request_url.query_pairs();
-	let poolname = params.filter_map(|(poolname, b)| {
-	 	if poolname=="poolname" {
-			Some(b)
-		} else {None}
-	}).next();
-	dbg!(&poolname);
-	match poolname {
-		Some(value) => {
-            let mut client_a = build_simple_client();
-            let request = ResourceRequest {
-                by_name: Some(String::from(value)),
-                ..Default::default()
-            };
+    if params.count() == 0 {
+        return Ok(Response::new(Full::new(Bytes::from("No value specified"))));
+    }
+    let mut request = ResourceRequest::default();
 
-            let lease = client_a.request(&request).await;
-            match lease {
-                Ok(lease) => {
-                    Ok(Response::new(Full::new(Bytes::from(format!("got {:?}",lease)))))
+    for (key, value) in params {
+        dbg!(&key);
+        dbg!(&value);
+        match key {
+           Cow::Borrowed(key) if key == "location" => {
+                request.location = Some(String::from(value))
+           }
+           Cow::Borrowed(key) if key == "by_name" => {
+                request.by_name = Some(String::from(value))
+           }
+           Cow::Borrowed(key) if key == "pool_attributes" => {
+                let attribute_list: Vec<String> = value.split(",").map(String::from).collect();
+                request.pool_attributes = Some(attribute_list);
+           }
+           Cow::Borrowed(key) if key.starts_with("resource_attributes") => {
+                dbg!(&value);
+                let resource_attributes: Vec<String> = value.split(",").map(String::from).collect();
+                dbg!(&resource_attributes);
+                match &mut request.resource_attributes {
+                    None => {
+                        request.resource_attributes = Some(vec![resource_attributes]);
+                    }
+                    Some(existing_list) => {
+                        existing_list.push(resource_attributes);
+                    }
                 }
-                Err(x) => {
-                    Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
-                }
-            }
-		}
-		None => {
-			Ok(Response::new(Full::new(Bytes::from("No value specified"))))
-		}
-	}
+           }
+           Cow::Borrowed(key) if key == "timeout" => {
+                let value = value.parse::<u64>();
+                match value {
+                    Ok(value) => {
+                        let value = Duration::new(value,0);
+                        request.timeout = Some(value);
+                    }
+                    Err(e) => {
+                        return Ok(Response::new(Full::new(Bytes::from(format!("parse error: {:?}",e)))));
+                    }
+               }
+           }
+           _ => {
+               todo!("error");
+           }
+        }
+    }
+    dbg!(&request);
+
+    let mut client_a = build_simple_client();
+    let lease = client_a.request(&request).await;
+    match lease {
+        Ok(lease) => {
+            Ok(Response::new(Full::new(Bytes::from(format!("got {:?}",lease)))))
+        }
+        Err(x) => {
+            Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
+        }
+    }
 }
 
 #[tokio::main]
