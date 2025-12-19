@@ -28,35 +28,37 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use tokio::sync::{Notify, Mutex};
 use tokio::time::{sleep_until, Duration, Instant};
+use serde::{Serialize, Deserialize};
 
 const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read default lease time from config file
 
 type AttributeSet = Vec<String>; // TODO:  Use BTreeSet
 type AttributeMatch = Vec<(AttributeSet, Resource)>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
     pub attributes: AttributeSet,
     pub properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pool {
     pub name: String,
     pub attributes: AttributeSet,
     pub location: String,
     pub resources: Vec<Resource>,
+    #[serde(skip_serializing,skip_deserializing)]
     pub user: Weak<Mutex<InnerClient>>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct InnerInventory{
     pools: Vec<Pool>,
 }
 #[derive(Debug,Clone)]
 pub struct Inventory (pub Arc<Mutex<InnerInventory>>);
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ResourceRequest {
     pub location: Option<String>,
     pub pool_attributes: Option<Vec<String>>, // TODO:  Use btreeset
@@ -65,18 +67,19 @@ pub struct ResourceRequest {
     pub by_name: Option<String> // This will be used to take a pool offline for maintenance
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum ResourceRequestError {
     Impossible,
     InUse,
     TimeOut
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PoolLease {
     leasetime: Duration,
     pool: Pool,
     pairing: Option<AttributeMatch>,
+    #[serde(skip_serializing,skip_deserializing)]
     notify: Arc<Notify>
 }
 

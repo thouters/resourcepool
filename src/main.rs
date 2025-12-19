@@ -105,7 +105,13 @@ async fn handle_request(_inventory: Inventory, request: Request<hyper::body::Inc
     let lease = client_a.request(&request).await;
     match lease {
         Ok(lease) => {
-            Ok(Response::new(Full::new(Bytes::from(format!("got {:?}",lease)))))
+            let json = serde_json::to_string_pretty(&lease);
+            match json {
+                Ok(json) => { Ok(Response::new(Full::new(Bytes::from(json))))}
+                Err(x) => {
+                    Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
+                }
+            }
         }
         Err(x) => {
             Ok(Response::new(Full::new(Bytes::from(format!("got an error: {:?}",x)))))
