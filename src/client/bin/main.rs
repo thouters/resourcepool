@@ -12,8 +12,8 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use url::Url;
-use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ResourceRequestError, ClientResourceRequest};
-use std::sync::{Arc, Weak};
+use rp::respo::{Inventory, Pool, Resource, Client, ResourceRequest, RespoClientFactory, ClientResourceRequest};
+use std::sync::Weak;
 use tokio::time::{ Duration };
 
 fn build_simple_inventory() -> Inventory {
