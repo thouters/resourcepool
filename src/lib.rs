@@ -21,7 +21,7 @@ Unit tests are provided for core matching scenarios.
 
 See README.md for usage, roadmap, and further details.
 */
-
+pub mod config;
 pub mod respo {
 
     use serde::{Deserialize, Serialize};

@@ -12,10 +12,44 @@ use hyper_util::rt::TokioIo;
 use rp::respo::{
     Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest, RespoClientFactory,
 };
+
+use rp::config::InventoryLoader;
+use std::{env, path::PathBuf};
 use std::sync::Weak;
 use tokio::net::TcpListener;
 use tokio::time::Duration;
 use url::Url;
+
+use clap::{Parser, Subcommand};
+
+fn get_default_config_path() -> PathBuf {
+    let mut path = env::current_dir().unwrap();
+    path.push("respod.yaml");
+    path
+}
+
+/// Resource pool client tool
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+    #[arg(short, long, default_value=get_default_config_path().into_os_string())]
+	/// configuration file (default respod.yaml)
+    config_path: PathBuf,
+    #[arg(short, long)]
+	/// logfile path
+	log: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Locks a pool for maintenance
+    Serve,
+}
+
+
 
 fn build_simple_inventory() -> Inventory {
     Inventory::new(vec![Pool {
@@ -120,14 +154,13 @@ async fn handle_request(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+async fn http_serve(inventory: Inventory) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000)); // TODO: make configurable
 
     // We create a TcpListener and bind it to 127.0.0.1:3000
     let listener = TcpListener::bind(addr).await?;
 
-    let inventory = build_simple_inventory();
     // We start a loop to continuously accept incoming connections
     loop {
         let onion1 = inventory.clone();
@@ -155,4 +188,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         });
     }
+}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    let args = Cli::parse();
+
+    match args.command {
+        Commands::Serve => {
+			args.config_path.try_exists().expect("Can't check existence of file or config does not exist");
+
+        }
+	}
+
+    let mut inventory = InventoryLoader::load(args.config_path);
+    inventory = build_simple_inventory();
+	http_serve(inventory).await
 }
