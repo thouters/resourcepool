@@ -10,6 +10,11 @@ path = "src/server/bin/main.rs"
 name = "client"
 path = "src/client/bin/main.rs"
 
+[[test]]
+name = "inventory"
+path = "tests/inventory.rs"
+
+
 [toolchain]
 channel = "nightly-2025-12-08"
 components = ["rustfmt", "clippy", "rust-analyzer"]

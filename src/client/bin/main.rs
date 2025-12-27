@@ -11,7 +11,7 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
     #[arg(short, long)]
-	server_url: Option<String>,
+    server_url: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -25,14 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     match args.command {
         Commands::Lock { pool_name } => {
-			let server_url = args.server_url.or_else(|| std::env::var("RP_SERVER").ok());
+            let server_url = args.server_url.or_else(|| std::env::var("RP_SERVER").ok());
 
-			server_url.expect("No server specified");
+            server_url.expect("No server specified");
 
             //let factory = RespoClientFactory::new(server_url);
 
             println!("lock {:?}", pool_name);
         }
-	}
+    }
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::respo::Inventory;
+use crate::inventory::Inventory;
 use std::path::PathBuf; //, Pool, Resource, ResourceRequest};
 
 pub struct InventoryLoader;

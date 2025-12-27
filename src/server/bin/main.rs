@@ -9,13 +9,13 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use rp::respo::{
+use rp::inventory::{
     Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest, RespoClientFactory,
 };
 
-use rp::config::InventoryLoader;
-use std::{env, path::PathBuf};
+//use rp::config::InventoryLoader;
 use std::sync::Weak;
+use std::{env, path::PathBuf};
 use tokio::net::TcpListener;
 use tokio::time::Duration;
 use url::Url;
@@ -36,11 +36,11 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
     #[arg(short, long, default_value=get_default_config_path().into_os_string())]
-	/// configuration file (default respod.yaml)
+    /// configuration file (default respod.yaml)
     config_path: PathBuf,
     #[arg(short, long)]
-	/// logfile path
-	log: Option<String>,
+    /// logfile path
+    log: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -48,8 +48,6 @@ enum Commands {
     /// Locks a pool for maintenance
     Serve,
 }
-
-
 
 fn build_simple_inventory() -> Inventory {
     Inventory::new(vec![Pool {
@@ -155,7 +153,6 @@ async fn handle_request(
 }
 
 async fn http_serve(inventory: Inventory) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000)); // TODO: make configurable
 
     // We create a TcpListener and bind it to 127.0.0.1:3000
@@ -191,17 +188,17 @@ async fn http_serve(inventory: Inventory) -> Result<(), Box<dyn std::error::Erro
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
     let args = Cli::parse();
 
     match args.command {
         Commands::Serve => {
-			args.config_path.try_exists().expect("Can't check existence of file or config does not exist");
-
+            args.config_path
+                .try_exists()
+                .expect("Can't check existence of file or config does not exist");
         }
-	}
+    }
 
-    let mut inventory = InventoryLoader::load(args.config_path);
-    inventory = build_simple_inventory();
-	http_serve(inventory).await
+    //let inventory = InventoryLoader::load(args.config_path);
+    let inventory = build_simple_inventory();
+    http_serve(inventory).await
 }

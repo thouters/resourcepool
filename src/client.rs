@@ -1,5 +1,5 @@
 pub mod client {
-    use rp::respo::{
+    use crate::inventory::{
         ResourceRequest
     };
 
