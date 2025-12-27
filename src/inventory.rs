@@ -22,6 +22,7 @@ Unit tests are provided for core matching scenarios.
 See README.md for usage, roadmap, and further details.
 */
 
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -33,25 +34,27 @@ const DEFAULT_LEASE_TIME: Duration = Duration::from_secs(1234); // TODO: read de
 type AttributeSet = Vec<String>; // TODO:  Use BTreeSet
 type AttributeMatch = Vec<(AttributeSet, Resource)>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Resource {
     pub attributes: AttributeSet,
     pub properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(PartialEq)]
 pub struct Pool {
     pub name: String,
     pub attributes: AttributeSet,
     pub location: String,
     pub resources: Vec<Resource>,
     #[serde(skip_serializing, skip_deserializing)]
+    #[derivative(PartialEq = "ignore")]
     pub user: Weak<Mutex<InnerClient>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct InnerInventory {
-    pools: Vec<Pool>,
+    pub pools: Vec<Pool>,
 }
 #[derive(Debug, Clone)]
 pub struct Inventory(pub Arc<Mutex<InnerInventory>>);
@@ -140,6 +143,7 @@ impl InventoryResourceRequest for Inventory {
     ) -> Result<PoolLease, ResourceRequestError> {
         let mut inventory = self.0.lock().await;
         let mut ultimate_failure: ResourceRequestError = ResourceRequestError::Impossible;
+
         for potential_pool in &mut inventory.pools {
             // skip if request.pool_attributes not a subset of potential_pool.attributes
             if let Some(wanted_pool_attributes) = &request.pool_attributes
@@ -174,7 +178,6 @@ impl InventoryResourceRequest for Inventory {
                 continue;
             }
             if potential_pool.user.upgrade().is_none() {
-                println!("claiming item");
                 potential_pool.user = Arc::downgrade(client);
                 return Ok(PoolLease {
                     leasetime: DEFAULT_LEASE_TIME,
@@ -183,7 +186,6 @@ impl InventoryResourceRequest for Inventory {
                     notify: Arc::clone(client_notify),
                 });
             } else {
-                println!("item is in use");
                 ultimate_failure = ResourceRequestError::InUse;
             }
         }
@@ -198,9 +200,8 @@ pub struct InnerClient {
     pub notify: Arc<Notify>,  // needed to retry a request
 }
 #[derive(Debug)]
-pub struct Client(Arc<Mutex<InnerClient>>);
+pub struct LocalRespoClient(Arc<Mutex<InnerClient>>);
 
-//#[async_trait]
 pub trait ClientResourceRequest {
     fn request(
         &mut self,
@@ -208,8 +209,7 @@ pub trait ClientResourceRequest {
     ) -> impl std::future::Future<Output = Result<PoolLease, ResourceRequestError>> + Send;
 }
 
-//#[async_trait]
-impl ClientResourceRequest for Client {
+impl ClientResourceRequest for LocalRespoClient {
     async fn request(
         &mut self,
         request: &ResourceRequest,
@@ -244,25 +244,27 @@ impl ClientResourceRequest for Client {
     }
 }
 
-pub struct RespoClientFactory {
+// TODO: refactor to 'InventoryManager', which tracks limits (leasetime)
+pub struct LocalRespoClientFactory {
     inventory: Inventory,
     notify: Arc<Notify>,
 }
-impl Client {
-    fn new(inner: InnerClient) -> Client {
-        Client(Arc::new(Mutex::new(inner)))
+
+impl LocalRespoClient {
+    fn new(inner: InnerClient) -> LocalRespoClient {
+        LocalRespoClient(Arc::new(Mutex::new(inner)))
     }
 }
 
-impl RespoClientFactory {
-    pub fn new(inventory: Inventory) -> RespoClientFactory {
+impl LocalRespoClientFactory {
+    pub fn new(inventory: Inventory) -> LocalRespoClientFactory {
         Self {
             inventory: inventory.clone(),
             notify: Arc::new(Notify::new()),
         }
     }
-    pub fn create(&mut self, name: String) -> Client {
-        Client::new(InnerClient {
+    pub fn create(&mut self, name: String) -> LocalRespoClient {
+        LocalRespoClient::new(InnerClient {
             name,
             inventory: self.inventory.clone(),
             notify: self.notify.clone(),

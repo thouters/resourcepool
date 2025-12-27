@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use rp::inventory::{
-        Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest,
-        ResourceRequestError, RespoClientFactory,
+        ClientResourceRequest, Inventory, LocalRespoClient, LocalRespoClientFactory, Pool,
+        Resource, ResourceRequest, ResourceRequestError,
     };
     use std::collections::HashMap;
     use std::sync::Weak;
@@ -27,9 +27,9 @@ mod tests {
             user: Weak::new(),
         }])
     }
-    fn build_simple_clientfactory() -> RespoClientFactory {
+    fn build_simple_clientfactory() -> LocalRespoClientFactory {
         let inventory = build_simple_inventory();
-        RespoClientFactory::new(inventory)
+        LocalRespoClientFactory::new(inventory)
     }
     fn build_ok_request() -> ResourceRequest {
         ResourceRequest {
@@ -37,7 +37,7 @@ mod tests {
             ..Default::default()
         }
     }
-    fn build_simple_client() -> Client {
+    fn build_simple_client() -> LocalRespoClient {
         let mut clientfactory = build_simple_clientfactory();
         clientfactory.create("client_a".into())
     }

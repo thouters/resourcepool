@@ -10,7 +10,8 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use rp::inventory::{
-    Client, ClientResourceRequest, Inventory, Pool, Resource, ResourceRequest, RespoClientFactory,
+    ClientResourceRequest, Inventory, LocalRespoClient, LocalRespoClientFactory, Pool, Resource,
+    ResourceRequest,
 };
 
 //use rp::config::InventoryLoader;
@@ -67,11 +68,11 @@ fn build_simple_inventory() -> Inventory {
         user: Weak::new(),
     }])
 }
-fn build_simple_clientfactory() -> RespoClientFactory {
+fn build_simple_clientfactory() -> LocalRespoClientFactory {
     let inventory = build_simple_inventory();
-    RespoClientFactory::new(inventory)
+    LocalRespoClientFactory::new(inventory)
 }
-fn build_simple_client() -> Client {
+fn build_simple_client() -> LocalRespoClient {
     let mut clientfactory = build_simple_clientfactory();
     clientfactory.create("client_a".into())
 }

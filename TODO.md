@@ -1,6 +1,7 @@
 
 
-* rename registry to inventory
+* create simple POC test on top of client/server proceses, with config file.
+* separate runtime InventoryManager data from Inventory (Reuse ClientFactory as InventoryManager)
 
 * stabilize the api for the registry so i can already add an async layer on top.
 

@@ -4,11 +4,9 @@ use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 
-struct httpclient {
+//struct HttpClient { }
 
-}
-
-pub fn test () -> Result{
+pub async fn test() -> Result<(), Box<dyn std::error::Error>> {
     // Parse our URL...
     let url = "http://localhost:3000/request".parse::<hyper::Uri>()?;
 
