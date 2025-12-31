@@ -86,13 +86,13 @@ pub struct PoolLease {
 
 impl Drop for PoolLease {
     fn drop(&mut self) {
-        println!("notifying waiters");
+        println!("notifying waiters so they retry");
         self.notify.notify_waiters()
     }
 }
 impl Inventory {
-    pub fn new(pools: Vec<Pool>) -> Inventory {
-        Inventory(Arc::new(Mutex::new(InnerInventory { pools })))
+    pub fn new(inner: InnerInventory) -> Inventory {
+        Inventory(Arc::new(Mutex::new(inner)))
     }
 }
 //#[async_trait]
@@ -263,7 +263,7 @@ impl LocalRespoClientFactory {
             notify: Arc::new(Notify::new()),
         }
     }
-    pub fn create(&mut self, name: String) -> LocalRespoClient {
+    pub fn create(&self, name: String) -> LocalRespoClient {
         LocalRespoClient::new(InnerClient {
             name,
             inventory: self.inventory.clone(),

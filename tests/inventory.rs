@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use rp::inventory::{
-        ClientResourceRequest, Inventory, LocalRespoClient, LocalRespoClientFactory, Pool,
-        Resource, ResourceRequest, ResourceRequestError,
+        ClientResourceRequest, InnerInventory, Inventory, LocalRespoClient,
+        LocalRespoClientFactory, Pool, Resource, ResourceRequest, ResourceRequestError,
     };
     use std::collections::HashMap;
     use std::sync::Weak;
@@ -10,22 +10,24 @@ mod tests {
     use tokio::time::{Duration, sleep};
 
     fn build_simple_inventory() -> Inventory {
-        Inventory::new(vec![Pool {
-            name: "pool1".into(),
-            attributes: vec!["attr1".into(), "attr2".into()],
-            location: "location1".into(),
-            resources: vec![
-                Resource {
-                    attributes: vec!["RA1".into(), "RA2".into()],
-                    properties: HashMap::new(),
-                },
-                Resource {
-                    attributes: vec!["RB1".into(), "RB2".into()],
-                    properties: HashMap::new(),
-                },
-            ],
-            user: Weak::new(),
-        }])
+        Inventory::new(InnerInventory {
+            pools: vec![Pool {
+                name: "pool1".into(),
+                attributes: vec!["attr1".into(), "attr2".into()],
+                location: "location1".into(),
+                resources: vec![
+                    Resource {
+                        attributes: vec!["RA1".into(), "RA2".into()],
+                        properties: HashMap::new(),
+                    },
+                    Resource {
+                        attributes: vec!["RB1".into(), "RB2".into()],
+                        properties: HashMap::new(),
+                    },
+                ],
+                user: Weak::new(),
+            }],
+        })
     }
     fn build_simple_clientfactory() -> LocalRespoClientFactory {
         let inventory = build_simple_inventory();
@@ -38,7 +40,7 @@ mod tests {
         }
     }
     fn build_simple_client() -> LocalRespoClient {
-        let mut clientfactory = build_simple_clientfactory();
+        let clientfactory = build_simple_clientfactory();
         clientfactory.create("client_a".into())
     }
     #[tokio::test]
@@ -125,7 +127,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_concurrent_usage_returns_error() {
-        let mut clientfactory = build_simple_clientfactory();
+        let clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
 
         let mut client_a = clientfactory.create("client_a".into());
@@ -147,7 +149,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_concurrent_timeout() {
-        let mut clientfactory = build_simple_clientfactory();
+        let clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
         let ok_with_timeout = ResourceRequest {
             timeout: Some(Duration::from_millis(500)),
@@ -175,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_becomes_available() {
         // FIXME: test should be using process time instead of walltime
-        let mut clientfactory = build_simple_clientfactory();
+        let clientfactory = build_simple_clientfactory();
         let ok_request = build_ok_request();
         let ok_with_timeout = ResourceRequest {
             timeout: Some(Duration::from_millis(1000)),

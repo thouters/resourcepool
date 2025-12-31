@@ -1,4 +1,4 @@
-use rp::client::RemoteRespoClientFactory;
+use rp::client::{RemoteRespoClientFactory, create_client_name};
 use rp::inventory::ClientResourceRequest;
 use rp::inventory::ResourceRequest;
 use std::{error::Error, process::Command};
@@ -15,18 +15,17 @@ struct Cli {
     #[arg(short, long)]
     spec_file: Option<String>,
     #[arg(short, long)]
-    server_url: Option<String>,
+    url: Option<String>,
+    #[arg(short, long)]
+    name: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Locks a pool for maintenance
-    Lock {
-        pool_name: Option<String>,
-    },
-    While {
-        shell_command: Vec<String>,
-    },
+    Lock,
+    /// Locks a pool while the shell command specified as arguments is running
+    While { shell_command: Vec<String> },
 }
 
 async fn whilerun(shell_command: Vec<String>) -> Result<(), Box<dyn Error>> {
@@ -47,26 +46,39 @@ async fn whilerun(shell_command: Vec<String>) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args = Cli::parse();
+    let server_url = args.url.or_else(|| std::env::var("RP_SERVER").ok());
 
     match args.command {
-        Commands::Lock { pool_name } => {
-            let server_url = args
-                .server_url
-                .or_else(|| std::env::var("RP_SERVER").ok())
-                .expect("No server specified");
-
-            let mut factory = RemoteRespoClientFactory::new(server_url);
+        Commands::Lock => {
+            let mut factory =
+                RemoteRespoClientFactory::new(server_url.expect("No server specified"));
             let mut client = factory.create("test_client".into());
 
             let ok_request = ResourceRequest {
-                by_name: Some(pool_name.unwrap()),
+                by_name: Some(args.name.unwrap()),
                 ..Default::default()
             };
             assert!(client.request(&ok_request).await.is_ok());
         }
         Commands::While { shell_command } => {
-            //            todo!("implement the locking then run  {:?}", shell_command);
-            whilerun(shell_command).await.unwrap();
+            let mut factory =
+                RemoteRespoClientFactory::new(server_url.expect("No server specified"));
+            let mut client = factory.create(create_client_name());
+
+            let ok_request = ResourceRequest {
+                by_name: Some(args.name.expect("No pool name specified")),
+                ..Default::default()
+            };
+            let lease = client.request(&ok_request).await;
+            match lease {
+                Ok(_lease) => {
+                    // FIXME: will not using it here cause a drop before we go out of scope?
+                    whilerun(shell_command).await.unwrap()
+                }
+                Err(x) => {
+                    println!("An error occured: {:?}", x);
+                }
+            }
         }
     }
     Ok(())

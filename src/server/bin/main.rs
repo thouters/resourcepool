@@ -1,27 +1,28 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs::File;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::{env, path::PathBuf};
 
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response};
+use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use rp::inventory::{
-    ClientResourceRequest, Inventory, LocalRespoClient, LocalRespoClientFactory, Pool, Resource,
-    ResourceRequest,
-};
 
-//use rp::config::InventoryLoader;
-use std::sync::Weak;
-use std::{env, path::PathBuf};
 use tokio::net::TcpListener;
 use tokio::time::Duration;
 use url::Url;
 
 use clap::{Parser, Subcommand};
+
+use rp::config::InventoryLoader;
+use rp::inventory::{
+    ClientResourceRequest, InnerInventory, Inventory, LocalRespoClient, LocalRespoClientFactory,
+    ResourceRequest,
+};
 
 fn get_default_config_path() -> PathBuf {
     let mut path = env::current_dir().unwrap();
@@ -50,50 +51,24 @@ enum Commands {
     Serve,
 }
 
-fn build_simple_inventory() -> Inventory {
-    Inventory::new(vec![Pool {
-        name: "pool1".into(),
-        attributes: vec!["attr1".into(), "attr2".into()],
-        location: "location1".into(),
-        resources: vec![
-            Resource {
-                attributes: vec!["RA1".into(), "RA2".into()],
-                properties: HashMap::new(),
-            },
-            Resource {
-                attributes: vec!["RB1".into(), "RB2".into()],
-                properties: HashMap::new(),
-            },
-        ],
-        user: Weak::new(),
-    }])
-}
-fn build_simple_clientfactory() -> LocalRespoClientFactory {
-    let inventory = build_simple_inventory();
-    LocalRespoClientFactory::new(inventory)
-}
-fn build_simple_client() -> LocalRespoClient {
-    let mut clientfactory = build_simple_clientfactory();
-    clientfactory.create("client_a".into())
-}
-
 async fn handle_request(
-    _inventory: Inventory,
+    client_factory: Arc<LocalRespoClientFactory>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let uri_string = request.uri().to_string();
-    let request_url = Url::parse("http://localhost")
-        .unwrap()
-        .join(&uri_string)
-        .unwrap();
+    let request_url = Url::parse(&uri_string).unwrap();
     let params = request_url.query_pairs();
     if params.count() == 0 {
-        return Ok(Response::new(Full::new(Bytes::from("No value specified"))));
+        let mut resp = Response::new(Full::new(Bytes::from("No value specified")));
+        *resp.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(resp);
     }
     let mut request = ResourceRequest::default();
+    let mut client_name: Option<String> = None;
 
     for (key, value) in params {
         match key {
+            Cow::Borrowed("client_name") => client_name = Some(String::from(value)),
             Cow::Borrowed("location") => request.location = Some(String::from(value)),
             Cow::Borrowed("by_name") => request.by_name = Some(String::from(value)),
             Cow::Borrowed("pool_attributes") => {
@@ -119,10 +94,10 @@ async fn handle_request(
                         request.timeout = Some(value);
                     }
                     Err(e) => {
-                        return Ok(Response::new(Full::new(Bytes::from(format!(
-                            "parse error: {:?}",
-                            e
-                        )))));
+                        let mut resp =
+                            Response::new(Full::new(Bytes::from(format!("parse error: {:?}", e))));
+                        *resp.status_mut() = StatusCode::BAD_REQUEST;
+                        return Ok(resp);
                     }
                 }
             }
@@ -133,7 +108,8 @@ async fn handle_request(
     }
     dbg!(&request);
 
-    let mut client_a = build_simple_client();
+    let mut client_a: LocalRespoClient =
+        client_factory.create(client_name.unwrap_or("no-name".into()));
     let lease = client_a.request(&request).await;
     match lease {
         Ok(lease) => {
@@ -153,15 +129,16 @@ async fn handle_request(
     }
 }
 
-async fn http_serve(inventory: Inventory) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn http_serve(
+    client_factory: LocalRespoClientFactory,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000)); // TODO: make configurable
 
-    // We create a TcpListener and bind it to 127.0.0.1:3000
     let listener = TcpListener::bind(addr).await?;
+    let client_factory = Arc::new(client_factory);
 
-    // We start a loop to continuously accept incoming connections
     loop {
-        let onion1 = inventory.clone();
+        let onion1 = client_factory.clone();
         let (stream, _) = listener.accept().await?;
 
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
@@ -196,10 +173,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             args.config_path
                 .try_exists()
                 .expect("Can't check existence of file or config does not exist");
+            let f = File::open(args.config_path).unwrap();
+            let parsed: InnerInventory = InventoryLoader::load(f);
+            let inventory = Inventory::new(parsed);
+            let client_factory = LocalRespoClientFactory::new(inventory);
+            http_serve(client_factory).await
         }
     }
-
-    //let inventory = InventoryLoader::load(args.config_path);
-    let inventory = build_simple_inventory();
-    http_serve(inventory).await
 }

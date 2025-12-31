@@ -1,0 +1,10 @@
+pools:
+  - name: pool1
+    attributes: [attr1, attr2]
+    location: location1
+    resources:
+      - attributes: [RA1, RA2]
+        properties: {}
+      - attributes: [RB1, RB2]
+        properties: {}
+    user: None

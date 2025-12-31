@@ -1,12 +1,12 @@
-use crate::inventory::Inventory;
-use std::path::PathBuf; //, Pool, Resource, ResourceRequest};
-
+use crate::inventory::InnerInventory;
+use serde_saphyr::from_reader;
 pub struct InventoryLoader;
 
 impl InventoryLoader {
-    pub fn load(_path: PathBuf) -> Inventory {
+    pub fn load<T: std::io::Read>(file: T) -> InnerInventory {
         //todo!("outsource yaml schema validation?");
         //Inventory::new(vec![])
-        todo!("implement yaml parsing and creating of an inventory");
+        let parsed: InnerInventory = from_reader(file).unwrap();
+        parsed
     }
 }

@@ -1,8 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use rp::config::InventoryLoader;
     use rp::inventory::{InnerInventory, Pool, Resource};
     use serde_saphyr::from_str;
     use std::collections::HashMap;
+    use std::fs::File;
     use std::sync::Weak;
 
     fn build_simple_inventory() -> InnerInventory {
@@ -42,6 +44,14 @@ pools:
     user: None
 "#;
         let parsed = from_str(yaml_input).unwrap();
+        assert_eq!(expected, parsed);
+    }
+    #[test]
+    fn test_inventoryloader() {
+        let expected = build_simple_inventory();
+
+        let f = File::open("./tests/simple_inventory.yaml").unwrap();
+        let parsed: InnerInventory = InventoryLoader::load(f);
         assert_eq!(expected, parsed);
     }
 }
