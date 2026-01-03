@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fs::File;
 use std::net::SocketAddr;
@@ -67,15 +66,15 @@ async fn handle_request(
     let mut client_name: Option<String> = None;
 
     for (key, value) in params {
-        match key {
-            Cow::Borrowed("client_name") => client_name = Some(String::from(value)),
-            Cow::Borrowed("location") => request.location = Some(String::from(value)),
-            Cow::Borrowed("by_name") => request.by_name = Some(String::from(value)),
-            Cow::Borrowed("pool_attributes") => {
+        match &*key {
+            "client_name" => client_name = Some(String::from(value)),
+            "location" => request.location = Some(String::from(value)),
+            "by_name" => request.by_name = Some(String::from(value)),
+            "pool_attributes" => {
                 let attribute_list: Vec<String> = value.split(",").map(String::from).collect();
                 request.pool_attributes = Some(attribute_list);
             }
-            Cow::Borrowed("resource_attributes") => {
+            "resource_attributes" => {
                 let resource_attributes: Vec<String> = value.split(",").map(String::from).collect();
                 match &mut request.resource_attributes {
                     None => {
@@ -86,7 +85,7 @@ async fn handle_request(
                     }
                 }
             }
-            Cow::Borrowed("timeout") => {
+            "timeout" => {
                 let value = value.parse::<u64>();
                 match value {
                     Ok(value) => {
@@ -102,7 +101,12 @@ async fn handle_request(
                 }
             }
             _ => {
-                todo!("error");
+                let mut resp = Response::new(Full::new(Bytes::from(format!(
+                    "key not recognised: {:?}",
+                    key
+                ))));
+                *resp.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(resp);
             }
         }
     }

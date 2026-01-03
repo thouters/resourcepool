@@ -4,6 +4,7 @@ use rp::inventory::ResourceRequest;
 use std::{error::Error, process::Command};
 
 use clap::{Parser, Subcommand};
+use std::process::ExitCode;
 
 /// Resource pool client tool
 #[derive(Parser, Debug)]
@@ -44,7 +45,7 @@ async fn whilerun(shell_command: Vec<String>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> ExitCode {
     let args = Cli::parse();
     let server_url = args.url.or_else(|| std::env::var("RP_SERVER").ok());
 
@@ -77,9 +78,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
                 Err(x) => {
                     println!("An error occured: {:?}", x);
+                    return ExitCode::from(1); // Specific error code
                 }
             }
         }
     }
-    Ok(())
+    ExitCode::SUCCESS
 }
