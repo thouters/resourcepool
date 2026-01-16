@@ -1,10 +1,11 @@
+use crate::client::ClientResourceRequestError;
+use crate::inventory::{PoolLease, ResourceRequest};
+use http_body_util::BodyExt;
 use http_body_util::Empty;
 use hyper::Request;
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
-
-use crate::inventory::ResourceRequest;
 
 pub fn build_query(client_name: Option<String>, request: &ResourceRequest) -> String {
     let mut query: Vec<String> = Vec::new();
@@ -30,8 +31,7 @@ pub fn build_query(client_name: Option<String>, request: &ResourceRequest) -> St
     query.join("&")
 }
 
-pub async fn test(url: String) -> Result<(), Box<dyn std::error::Error>> {
-    // Parse our URL...
+pub async fn try_request(url: String) -> Result<PoolLease, ClientResourceRequestError> {
     let url = url.parse::<hyper::Uri>()?;
     dbg!(&url);
 
@@ -41,16 +41,12 @@ pub async fn test(url: String) -> Result<(), Box<dyn std::error::Error>> {
 
     let address = format!("{}:{}", host, port);
 
-    // Open a TCP connection to the remote host
     let stream = TcpStream::connect(address)
         .await
         .expect("unable to connect");
 
-    // Use an adapter to access something implementing `tokio::io` traits as if they implement
-    // `hyper::rt` IO traits.
     let io = TokioIo::new(stream);
 
-    // Create the Hyper client
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
         .await
         .expect("create client failed");
@@ -62,19 +58,21 @@ pub async fn test(url: String) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // The authority of our URL will be the hostname of the httpbin remote
     let authority = url.authority().unwrap().clone();
 
-    // Create an HTTP request with an empty body and a HOST header
     let req = Request::builder()
         .uri(url)
         .header(hyper::header::HOST, authority.as_str())
-        .body(Empty::<Bytes>::new())
-        .expect("failed to create request");
+        .body(Empty::<Bytes>::new())?;
 
-    // Await the response...
-    let res = sender.send_request(req).await.expect("response error");
-
+    let res = sender.send_request(req).await?;
     println!("Response status: {}", res.status());
-    Ok(())
+
+    // asynchronously read the body as bytes
+    let body = res.into_body().collect().await?;
+    let body_bytes = body.to_bytes();
+
+    let result = serde_json::from_slice(&body_bytes)?;
+
+    Ok(result)
 }

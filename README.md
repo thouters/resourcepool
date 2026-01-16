@@ -1,18 +1,19 @@
 # About
 
+Note: This project is a work-in-progress.
+
 resourcepool(d)/respo(d) - a resource (eg network connected equipment test bench) leasing system
 
-It's a HTTP service where you can request exclusive access to a resource, which is composed of a set of entities with
-attributes.
+It's a HTTP service that you can ask exclusive access to a resource, which is composed of a set of entities that possess attributes.
 A resource could be a testbench (bench), which is typically used for hardware in the loop testing in software validation, and is composed of one or more devices under test, debugging adaptors and measurement equipment.
 
-Hence, a client would request access to a resource by either specifying its name, or submitting a query describing attributes the resource or its entities posess.
+Hence, a client would request access to a resource by either specifying its name, or submitting a query describing attributes the resource or its entities possess.
 When submitting a query, the result can be any resource matching the query, returning an next available resource without the
 need for the client to pick a specific one.
 
 # Summary usage
 
-As resource client, I want to do a HTTP POST /lock?location=myoffice&resource=myresource to request use of an a resource by name.
+As resource client, I want to do a HTTP POST ``/lock?location=myoffice&by_name=myresource`` to request use of a resourcepool by name.
 Upon receiving the message that the resource is locked, the client shall be able to use the returned resource (description)
 until the client cuts the connection to the service. At that point the lock is considered implicitly released.
 
@@ -46,9 +47,9 @@ resource.entities - entity - property
   * using some http server crate
   * using yaml crate for configuration parsing
 * command line tool
-* unittests
-* black box tests
-* rust based client library
+* unittests, integration tests(black box tests)
+* A rust based client library
+* A rust based cli tool
 
 ## stretch
 
@@ -63,7 +64,7 @@ Use hyper (library) + hyper_thungstenite (websockets) or rocket (fancy wrapper a
 
 **As a ** client \
 **I can do** http post to placeholder endpoints
-* POST /lock?resource=name&description=whatIdo&priority=10
+* POST /lock?by_name=poolname&description=whatIdo&priority=10
 * GET / - return hello, eventually it can print an overview of available HW and use.
 
 ## 1. minimum viable product
@@ -136,7 +137,7 @@ pool:
             api_key: foobar
 ```
 
-DoD: user story met and unittests for resource selection added.
+DoD: user story and unittests for resource selection added.
 
 ## 4. persistence
 **As a** devops engineer \

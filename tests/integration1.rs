@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::{process::Command};
+    use std::process::Command;
     #[test]
     fn test_integration1() {
         let configfile = "./tests/simple_inventory.yaml";

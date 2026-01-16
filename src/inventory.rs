@@ -26,6 +26,7 @@ use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use thiserror::Error;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, Instant, sleep_until};
 
@@ -68,14 +69,19 @@ pub struct ResourceRequest {
     pub by_name: Option<String>, // This will be used to take a pool offline for maintenance
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Error)]
 pub enum ResourceRequestError {
+    #[error(
+        "The request is impossible: it would never be able to match given the current resources"
+    )]
     Impossible,
+    #[error("The matching resource(s) are in use, and the request indicates an immediate result")]
     InUse,
+    #[error("The matching resource(s) are in use, and the given maximum time has been exceeded")]
     TimeOut,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolLease {
     leasetime: Duration,
     pool: Pool,

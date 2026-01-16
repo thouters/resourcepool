@@ -1,5 +1,4 @@
 use rp::client::{RemoteRespoClientFactory, create_client_name};
-use rp::inventory::ClientResourceRequest;
 use rp::inventory::ResourceRequest;
 use std::{error::Error, process::Command};
 
