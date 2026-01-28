@@ -11,6 +11,8 @@ pub enum ClientResourceRequestError {
     InventoryError(ResourceRequestError),
     #[error("URL error: {0}")]
     InvalidUriError(#[from] ::http::uri::InvalidUri),
+    #[error("No host specified")]
+    InvalidHostError,
     #[error("HTTP Communication error: {0}")]
     HTTPCommunicationError(#[from] ::http::Error),
     #[error("JSON Parsing error: {0}")]

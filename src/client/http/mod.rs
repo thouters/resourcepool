@@ -35,8 +35,9 @@ pub async fn try_request(url: String) -> Result<PoolLease, ClientResourceRequest
     let url = url.parse::<hyper::Uri>()?;
     dbg!(&url);
 
-    // Get the host and the port
-    let host = url.host().expect("uri has no host");
+    let host = url
+        .host()
+        .ok_or(ClientResourceRequestError::InvalidHostError)?;
     let port = url.port_u16().unwrap_or(80);
 
     let address = format!("{}:{}", host, port);
