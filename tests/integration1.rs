@@ -1,12 +1,16 @@
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command};
+    // clean up subprocess when the test takes an error path
     struct AutoKilledChild(Child);
 
     impl Drop for AutoKilledChild {
         fn drop(&mut self) {
             println!("Killing child");
-            self.0.kill().expect("failed to kill child")
+            // print the error to stderr while not returnign it in this destructor
+            let _ = self.0.kill().map_err(|e| {
+                println!("Could not kill child: error code: {e}");
+            });
         }
     }
     impl From<Child> for AutoKilledChild {

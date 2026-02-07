@@ -8,7 +8,8 @@ requests to available resources, handling pool attributes, resource attributes, 
 Main Components:
 - Resource: Represents an individual entity with attributes and properties.
 - Pool: A collection of resources, with its own attributes and location.
-- Inventory: Holds all pools and manages resource allocation.
+- Inventory: Holds all pools
+- InventoryManager: Manages resource allocation.
 - ResourceRequest: Describes a client's requirements for resource allocation.
 - PoolLease: Represents a successful lease of a pool, including resource pairing.
 - InventoryResourceRequest: Trait for handling resource requests and matching logic.
@@ -54,11 +55,11 @@ pub struct Pool {
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
-pub struct InnerInventory {
+pub struct Inventory {
     pub pools: Vec<Pool>,
 }
 #[derive(Debug, Clone)]
-pub struct Inventory(pub Arc<Mutex<InnerInventory>>);
+pub struct InventoryManager(pub Arc<Mutex<Inventory>>);
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResourceRequest {
@@ -93,12 +94,13 @@ pub struct PoolLease {
 impl Drop for PoolLease {
     fn drop(&mut self) {
         println!("notifying waiters so they retry");
+        // the client should be dropped for this to work! not the lease!
         self.notify.notify_waiters()
     }
 }
-impl Inventory {
-    pub fn new(inner: InnerInventory) -> Inventory {
-        Inventory(Arc::new(Mutex::new(inner)))
+impl InventoryManager {
+    pub fn new(inner: Inventory) -> InventoryManager {
+        InventoryManager(Arc::new(Mutex::new(inner)))
     }
 }
 //#[async_trait]
@@ -140,7 +142,7 @@ fn solve_resource_matches(
 }
 
 //#[async_trait]
-impl InventoryResourceRequest for Inventory {
+impl InventoryResourceRequest for InventoryManager {
     async fn request(
         &mut self,
         request: &ResourceRequest,
@@ -202,13 +204,16 @@ impl InventoryResourceRequest for Inventory {
 #[derive(Debug)]
 pub struct InnerClient {
     pub name: String,
-    pub inventory: Inventory, // needed to make a request
-    pub notify: Arc<Notify>,  // needed to retry a request
+    pub inventory_manager: InventoryManager, // needed to make a request
+    pub notify: Arc<Notify>,                 // needed to retry a request
 }
 #[derive(Debug)]
 pub struct LocalRespoClient(Arc<Mutex<InnerClient>>);
 
 pub trait ClientResourceRequest {
+    /// request a resource to the server.
+    /// When a timeout is given, we offer our notification channel to the server
+    /// and sleep until the race between deadline or notification finishes.
     fn request(
         &mut self,
         request: &ResourceRequest,
@@ -225,7 +230,11 @@ impl ClientResourceRequest for LocalRespoClient {
         loop {
             let mut client = self.0.lock().await;
             let notify = client.notify.clone();
-            match client.inventory.request(request, &self.0, &notify).await {
+            match client
+                .inventory_manager
+                .request(request, &self.0, &notify)
+                .await
+            {
                 Ok(lease) => return Ok(lease),
                 Err(ResourceRequestError::InUse) => {
                     drop(client);
@@ -252,7 +261,7 @@ impl ClientResourceRequest for LocalRespoClient {
 
 // TODO: refactor to 'InventoryManager', which tracks limits (leasetime)
 pub struct LocalRespoClientFactory {
-    inventory: Inventory,
+    inventory_manager: InventoryManager,
     notify: Arc<Notify>,
 }
 
@@ -263,16 +272,16 @@ impl LocalRespoClient {
 }
 
 impl LocalRespoClientFactory {
-    pub fn new(inventory: Inventory) -> LocalRespoClientFactory {
+    pub fn new(inventory_manager: InventoryManager) -> LocalRespoClientFactory {
         Self {
-            inventory: inventory.clone(),
+            inventory_manager: inventory_manager.clone(),
             notify: Arc::new(Notify::new()),
         }
     }
     pub fn create(&self, name: String) -> LocalRespoClient {
         LocalRespoClient::new(InnerClient {
             name,
-            inventory: self.inventory.clone(),
+            inventory_manager: self.inventory_manager.clone(),
             notify: self.notify.clone(),
         })
     }

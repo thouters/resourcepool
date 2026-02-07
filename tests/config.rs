@@ -1,14 +1,14 @@
 #[cfg(test)]
 mod tests {
     use rp::config::InventoryLoader;
-    use rp::inventory::{InnerInventory, Pool, Resource};
+    use rp::inventory::{Inventory, Pool, Resource};
     use serde_saphyr::from_str;
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Weak;
 
-    fn build_simple_inventory() -> InnerInventory {
-        InnerInventory {
+    fn build_simple_inventory() -> Inventory {
+        Inventory {
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -51,7 +51,7 @@ pools:
         let expected = build_simple_inventory();
 
         let f = File::open("./tests/simple_inventory.yaml").unwrap();
-        let parsed: InnerInventory = InventoryLoader::load(f);
+        let parsed: Inventory = InventoryLoader::load(f);
         assert_eq!(expected, parsed);
     }
 }

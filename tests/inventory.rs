@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use rp::inventory::{
-        ClientResourceRequest, InnerInventory, Inventory, LocalRespoClient,
+        ClientResourceRequest, Inventory, InventoryManager, LocalRespoClient,
         LocalRespoClientFactory, Pool, Resource, ResourceRequest, ResourceRequestError,
     };
     use std::collections::HashMap;
@@ -9,8 +9,8 @@ mod tests {
     use tokio::join;
     use tokio::time::{Duration, sleep};
 
-    fn build_simple_inventory() -> Inventory {
-        Inventory::new(InnerInventory {
+    fn build_simple_inventory_manager() -> InventoryManager {
+        InventoryManager::new(Inventory {
             pools: vec![Pool {
                 name: "pool1".into(),
                 attributes: vec!["attr1".into(), "attr2".into()],
@@ -30,8 +30,8 @@ mod tests {
         })
     }
     fn build_simple_clientfactory() -> LocalRespoClientFactory {
-        let inventory = build_simple_inventory();
-        LocalRespoClientFactory::new(inventory)
+        let inventory_manager = build_simple_inventory_manager();
+        LocalRespoClientFactory::new(inventory_manager)
     }
     fn build_ok_request() -> ResourceRequest {
         ResourceRequest {

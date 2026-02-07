@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 
 use rp::config::InventoryLoader;
 use rp::inventory::{
-    ClientResourceRequest, InnerInventory, Inventory, LocalRespoClient, LocalRespoClientFactory,
+    ClientResourceRequest, Inventory, InventoryManager, LocalRespoClient, LocalRespoClientFactory,
     ResourceRequest,
 };
 
@@ -178,9 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .try_exists()
                 .expect("Can't check existence of file or config does not exist");
             let f = File::open(args.config_path).unwrap();
-            let parsed: InnerInventory = InventoryLoader::load(f);
-            let inventory = Inventory::new(parsed);
-            let client_factory = LocalRespoClientFactory::new(inventory);
+            let parsed: Inventory = InventoryLoader::load(f);
+            let manager = InventoryManager::new(parsed);
+            let client_factory = LocalRespoClientFactory::new(manager);
             http_serve(client_factory).await
         }
     }
